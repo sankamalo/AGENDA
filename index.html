@@ -369,13 +369,49 @@
     return { items: r.items || [], strokes, u: r.u || 0 };
   }
 
+  // acepta el bloque tal cual lo da Firebase: JSON, formato JS (const firebaseConfig = {...};),
+  // comillas tipograficas, comillas simples, nombres de campo sin comillas y comas finales
+  function parseFirebaseConfig(raw) {
+    let t = String(raw)
+      .replace(/[\u201C\u201D\u2033]/g, '"')   // comillas dobles tipograficas -> rectas
+      .replace(/[\u2018\u2019\u2032]/g, "'")   // comillas simples tipograficas -> rectas
+      .trim();
+    // localizar el objeto {...}; preferir el que sigue a "firebaseConfig ="
+    let start = -1;
+    const eq = t.search(/firebaseConfig\s*=/);
+    if (eq !== -1) start = t.indexOf('{', eq);
+    if (start === -1) start = t.indexOf('{');
+    if (start === -1) throw new Error('sin objeto');
+    // recorrer emparejando llaves, ignorando las que van dentro de comillas
+    let depth = 0, inStr = false, q = '', end = -1;
+    for (let i = start; i < t.length; i++) {
+      const c = t[i];
+      if (inStr) {
+        if (c === '\\') i++;
+        else if (c === q) inStr = false;
+      } else if (c === '"' || c === "'") { inStr = true; q = c; }
+      else if (c === '{') depth++;
+      else if (c === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    if (end === -1) throw new Error('objeto sin cerrar');
+    t = t.slice(start, end + 1);
+    try { return JSON.parse(t); } catch (e) {}
+    const j = t
+      .replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":') // pone comillas a las claves
+      .replace(/'/g, '"')                                       // comillas simples -> dobles
+      .replace(/,(\s*[}\]])/g, '$1');                           // quita comas finales
+    return JSON.parse(j);
+  }
+
   async function connectSync() {
     const cfgRaw = (local.getPref('agenda-fb-config') || '').trim();
     const key = (local.getPref('agenda-sync-key') || '').trim();
     if (!cfgRaw || !key) return;
     if (key.length < 30) { setSync('err', 'La clave debe tener al menos 30 caracteres. Usa "generar".'); return; }
     let cfg;
-    try { cfg = JSON.parse(cfgRaw); } catch (e) { setSync('err', 'El firebaseConfig no es JSON válido.'); return; }
+    try { cfg = parseFirebaseConfig(cfgRaw); }
+    catch (e) { setSync('err', 'No se pudo leer el firebaseConfig. Pega el bloque completo que te dio Firebase.'); return; }
+    if (!cfg.projectId || !cfg.apiKey) { setSync('err', 'Al firebaseConfig le faltan datos (projectId o apiKey). Copia el bloque entero.'); return; }
 
     try {
       const { initializeApp } = await import('https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js');
