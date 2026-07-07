@@ -1,4 +1,4 @@
-const CACHE = 'agenda-v2';
+const CACHE = 'agenda-v3';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -14,7 +14,7 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET') return;
 
-  // SDK de Firebase (gstatic): cache-first para que la sync funcione tras cargar una vez
+  // SDK de Firebase (gstatic): cache-first (las URLs llevan version, no cambian)
   if (url.hostname === 'www.gstatic.com') {
     e.respondWith(
       caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
@@ -26,15 +26,18 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // resto de peticiones externas (Firestore, etc.): dejar pasar sin interceptar
+  // resto de peticiones externas (Firestore, etc.): no interceptar
   if (url.origin !== location.origin) return;
 
-  // archivos de la app: cache-first
+  // archivos de la app: RED PRIMERO (siempre la ultima version),
+  // y cache solo como respaldo cuando no hay conexion
   e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request).then(res => {
+    fetch(e.request).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, copy));
       return res;
-    }).catch(() => caches.match('./index.html')))
+    }).catch(() =>
+      caches.match(e.request).then(cached => cached || caches.match('./index.html'))
+    )
   );
 });
