@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Agenda</title>
+<meta name="theme-color" content="#FBFBF9">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Agenda">
+<style>
+  :root {
+    --paper: #FBFBF9;
+    --ink: #1C1C1A;
+    --ink-soft: #8A8A84;
+    --ink-faint: #D8D8D2;
+    --verde: #1F7A4D;      /* verde Manrique */
+    --verde-soft: #E7F1EB;
+    --panel: #F4F4F0;
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--sans);
+    background: var(--paper);
+    color: var(--ink);
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  .app { display: flex; height: 100vh; height: 100dvh; }
+  .scroll-area {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: calc(20px + env(safe-area-inset-top)) 20px 120px;
+  }
+  .page { max-width: 640px; margin: 0 auto; }
+
+  /* ---------- header ---------- */
+  .date-line { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; padding-right: 76px; }
+  .date-num { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; color: var(--verde); }
+  .date-name { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; }
+  .date-name::first-letter { text-transform: uppercase; }
+  .readonly-tag {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
+    border: 1px solid var(--ink-faint); border-radius: 4px;
+    padding: 2px 8px; cursor: pointer; background: none;
+  }
+  .readonly-tag:hover { color: var(--verde); border-color: var(--verde); }
+  .rule { height: 1px; background: var(--ink-faint); margin: 18px 0 8px; }
+  .hidden { display: none !important; }
+
+  /* ---------- tasks ---------- */
+  .task { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; }
+  .task:hover .task-del { opacity: 1; }
+  .check {
+    flex: none; width: 18px; height: 18px; margin-top: 3px;
+    border: 1.5px solid var(--ink-soft); border-radius: 50%;
+    background: none; cursor: pointer; position: relative;
+  }
+  .task.done .check { border-color: var(--verde); background: var(--verde); }
+  .task.done .check::after {
+    content: ""; position: absolute; left: 5px; top: 2px;
+    width: 4px; height: 8px;
+    border: solid #fff; border-width: 0 1.5px 1.5px 0;
+    transform: rotate(42deg);
+  }
+  .task-text {
+    flex: 1; font-size: 16px; line-height: 1.45;
+    border: none; background: none; outline: none;
+    color: var(--ink); font-family: inherit; resize: none; overflow: hidden;
+  }
+  .task.done .task-text { color: var(--ink-soft); text-decoration: line-through; text-decoration-color: var(--ink-faint); }
+  .task-del {
+    flex: none; opacity: 0; border: none; background: none;
+    color: var(--ink-soft); font-size: 16px; cursor: pointer; padding: 2px 6px;
+  }
+  @media (hover: none) { .task-del { opacity: 1; } }
+  .task-del:hover { color: var(--ink); }
+
+  .new-task { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0 4px; }
+  .new-task .ghost-check {
+    flex: none; width: 18px; height: 18px; margin-top: 3px;
+    border: 1.5px dashed var(--ink-faint); border-radius: 50%;
+  }
+  .new-task input {
+    flex: 1; font-size: 16px; line-height: 1.45;
+    border: none; background: none; outline: none;
+    font-family: inherit; color: var(--ink);
+  }
+  .new-task input::placeholder { color: var(--ink-faint); }
+  .empty-hint { color: var(--ink-faint); font-size: 15px; padding: 6px 0 2px 30px; user-select: none; }
+
+  /* ---------- sketch (misma página) ---------- */
+  .sketch-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin: 26px 0 10px;
+  }
+  .sketch-label {
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft);
+  }
+  .draw-toggle {
+    font-family: var(--mono); font-size: 12px;
+    border: 1px solid var(--ink-faint); background: var(--paper);
+    color: var(--ink); border-radius: 6px; padding: 6px 12px; cursor: pointer;
+  }
+  .draw-toggle.on { border-color: var(--verde); background: var(--verde); color: #fff; }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 0 0 10px;
+  }
+  .toolbar.off { opacity: 0.35; pointer-events: none; }
+  .swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+  .swatch.sel { border-color: var(--ink); box-shadow: 0 0 0 2px var(--paper) inset; }
+  .tool-btn {
+    font-family: var(--mono); font-size: 12px;
+    border: 1px solid var(--ink-faint); background: var(--paper);
+    color: var(--ink); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  }
+  .tool-btn.sel { border-color: var(--verde); color: var(--verde); }
+  .tool-sep { width: 1px; height: 20px; background: var(--ink-faint); margin: 0 2px; }
+
+  .sketch-wrap {
+    border: 1px solid var(--ink-faint);
+    border-radius: 10px;
+    background: #fff;
+    overflow: hidden;
+    position: relative;
+  }
+  .sketch-wrap.armed { border-color: var(--verde); box-shadow: 0 0 0 1px var(--verde); }
+  #sketch { display: block; width: 100%; }
+  .sketch-wrap.armed #sketch { touch-action: none; cursor: crosshair; }
+
+  /* ---------- sidebar ---------- */
+  .toggle {
+    position: fixed;
+    top: calc(16px + env(safe-area-inset-top)); right: 16px; z-index: 30;
+    border: 1px solid var(--ink-faint); background: var(--paper);
+    border-radius: 8px; font-family: var(--mono); font-size: 12px;
+    padding: 8px 12px; cursor: pointer; color: var(--ink);
+  }
+  .toggle:hover { border-color: var(--verde); }
+  .toggle:focus-visible, .check:focus-visible, .day-item:focus-visible,
+  .tool-btn:focus-visible, .swatch:focus-visible, .draw-toggle:focus-visible {
+    outline: 2px solid var(--verde); outline-offset: 2px;
+  }
+  .sidebar {
+    width: 0; overflow: hidden;
+    background: var(--panel); border-left: 1px solid var(--ink-faint);
+    transition: width .28s cubic-bezier(.4,0,.2,1);
+    display: flex; flex-direction: column;
+  }
+  .sidebar.open { width: 292px; }
+  @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+  .sidebar-inner {
+    width: 292px;
+    padding: calc(64px + env(safe-area-inset-top)) 0 24px;
+    overflow-y: auto; flex: 1;
+  }
+  .sidebar-title {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--ink-soft); padding: 0 22px 12px;
+  }
+  .day-item {
+    display: flex; justify-content: space-between; align-items: baseline;
+    width: 100%; text-align: left; border: none; background: none;
+    padding: 10px 22px; cursor: pointer; font-family: inherit;
+  }
+  .day-item:hover { background: var(--verde-soft); }
+  .day-item.active { background: var(--verde-soft); box-shadow: inset 3px 0 0 var(--verde); }
+  .day-item .d-name { font-size: 14px; color: var(--ink); }
+  .day-item .d-name::first-letter { text-transform: uppercase; }
+  .day-item .d-meta { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+  .day-item .d-meta .ok { color: var(--verde); }
+  .sidebar-empty { padding: 6px 22px 10px; font-size: 13px; color: var(--ink-soft); }
+
+  .sidebar-block { padding: 16px 22px 0; border-top: 1px solid var(--ink-faint); margin-top: 14px; }
+  .sidebar-block summary {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--ink-soft); cursor: pointer;
+    list-style: none; display: flex; align-items: center; gap: 8px;
+  }
+  .sidebar-block summary::-webkit-details-marker { display: none; }
+  .sync-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); flex: none; }
+  .sync-dot.on { background: var(--verde); }
+  .sync-dot.err { background: #C4452E; }
+  .sidebar-block .inner { padding: 12px 0 4px; display: flex; flex-direction: column; gap: 8px; }
+  .sidebar-block textarea, .sidebar-block input[type=text] {
+    width: 100%; font-family: var(--mono); font-size: 11px;
+    border: 1px solid var(--ink-faint); border-radius: 6px;
+    padding: 8px; background: #fff; color: var(--ink); outline: none; resize: vertical;
+  }
+  .sidebar-block textarea:focus, .sidebar-block input:focus { border-color: var(--verde); }
+  .sidebar-block .row { display: flex; gap: 6px; }
+  .sidebar-block .row input { flex: 1; }
+  .sync-msg { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); line-height: 1.5; }
+  .storage-note { padding: 14px 22px 0; font-family: var(--mono); font-size: 10px; color: var(--ink-soft); }
+
+  @media (max-width: 640px) {
+    .sidebar.open { width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 20; }
+    .date-name { font-size: 21px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <main class="scroll-area" id="scrollArea">
+    <div class="page">
+      <div class="date-line">
+        <span class="date-num" id="dateNum"></span>
+        <h1 class="date-name" id="dateName"></h1>
+        <button class="readonly-tag hidden" id="backToday">← volver a hoy</button>
+      </div>
+      <div class="rule"></div>
+
+      <!-- tareas / notas -->
+      <div id="taskList"></div>
+      <div class="new-task">
+        <span class="ghost-check"></span>
+        <input type="text" id="newTaskInput" placeholder="Añadir tarea o nota…" autocomplete="off">
+      </div>
+
+      <!-- lienzo en la misma página -->
+      <div class="sketch-head">
+        <span class="sketch-label">Lienzo</span>
+        <button class="draw-toggle" id="drawToggle">✎ dibujar</button>
+      </div>
+      <div class="toolbar off" id="toolbar">
+        <button class="swatch sel" data-color="#1C1C1A" style="background:#1C1C1A" aria-label="Tinta"></button>
+        <button class="swatch" data-color="#1F7A4D" style="background:#1F7A4D" aria-label="Verde"></button>
+        <button class="swatch" data-color="#C4452E" style="background:#C4452E" aria-label="Rojo"></button>
+        <button class="swatch" data-color="#2B5F8A" style="background:#2B5F8A" aria-label="Azul"></button>
+        <span class="tool-sep"></span>
+        <button class="tool-btn" data-size="3">fino</button>
+        <button class="tool-btn sel" data-size="6">medio</button>
+        <button class="tool-btn" data-size="14">grueso</button>
+        <span class="tool-sep"></span>
+        <button class="tool-btn" id="eraserBtn">goma</button>
+        <button class="tool-btn" id="undoBtn">deshacer</button>
+        <button class="tool-btn" id="clearBtn">limpiar</button>
+      </div>
+      <div class="sketch-wrap" id="sketchWrap">
+        <canvas id="sketch"></canvas>
+      </div>
+    </div>
+  </main>
+
+  <button class="toggle" id="toggleBtn" aria-expanded="false">días ◂</button>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-inner">
+      <div class="sidebar-title">Días anteriores</div>
+      <div id="dayList"></div>
+
+      <details class="sidebar-block" id="syncBlock">
+        <summary><span class="sync-dot" id="syncDot"></span> Sincronización</summary>
+        <div class="inner">
+          <div class="sync-msg" id="syncMsg">Sin configurar. Pega tu firebaseConfig y usa la misma clave en ambos dispositivos (instrucciones en LEEME.txt).</div>
+          <textarea id="fbConfig" rows="4" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","appId":"..."}'></textarea>
+          <div class="row">
+            <input type="text" id="syncKey" placeholder="clave de sincronización">
+            <button class="tool-btn" id="genKey">generar</button>
+          </div>
+          <button class="tool-btn" id="connectBtn">conectar</button>
+        </div>
+      </details>
+
+      <div class="sidebar-block">
+        <div class="inner" style="padding-top:0">
+          <button class="tool-btn" id="exportBtn">⤓ exportar copia (.json)</button>
+          <button class="tool-btn" id="importBtn">⤒ importar copia</button>
+          <input type="file" id="importFile" accept="application/json" class="hidden">
+        </div>
+      </div>
+
+      <div class="storage-note" id="storageNote"></div>
+    </div>
+  </aside>
+</div>
+
+<script type="module">
+(function () {
+  // ================= almacenamiento local (siempre activo, la app es local-first) =================
+  const KEY = 'agenda-days';
+  let localMode = 'sin persistencia';
+  let ls = null;
+  try { ls = window.localStorage; ls.setItem('__t','1'); ls.removeItem('__t'); } catch (e) { ls = null; }
+  if (ls) localMode = 'local: este dispositivo';
+  let mem = {};
+  const local = {
+    load() {
+      if (ls) { try { return JSON.parse(ls.getItem(KEY) || '{}'); } catch (e) { return {}; } }
+      return mem;
+    },
+    save(d) {
+      if (ls) { try { ls.setItem(KEY, JSON.stringify(d)); } catch (e) { alert('Sin espacio local. Exporta una copia y limpia dibujos antiguos.'); } }
+      else mem = d;
+    },
+    getPref(k) { return ls ? ls.getItem(k) : null; },
+    setPref(k, v) { if (ls) ls.setItem(k, v); }
+  };
+
+  // ================= estado =================
+  // days = { "2026-07-07": { items:[{id,text,done}], strokes:[{c,s,e,p:[[x,y]..]}], u:timestamp } }
+  let days = {};
+  let viewKey = todayKey();
+
+  function todayKey() {
+    const d = new Date(); const p = n => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+  }
+  function keyToDate(k) { const [y,m,d] = k.split('-').map(Number); return new Date(y, m-1, d); }
+  function fmtName(k)  { return keyToDate(k).toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'long' }); }
+  function fmtShort(k) { return keyToDate(k).toLocaleDateString('es-ES', { weekday:'short', day:'numeric', month:'short' }); }
+  function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+  function day() { if (!days[viewKey]) days[viewKey] = { items: [], strokes: [], u: 0 }; return days[viewKey]; }
+  function dayHasContent(k) {
+    const d = days[k]; if (!d) return false;
+    return (d.items && d.items.length > 0) || (d.strokes && d.strokes.length > 0);
+  }
+
+  let saveTimer = null;
+  function persist(k) {
+    k = k || viewKey;
+    if (days[k]) days[k].u = Date.now();
+    local.save(days);
+    pushDay(k);
+  }
+  function persistDebounced() { clearTimeout(saveTimer); saveTimer = setTimeout(() => persist(), 500); }
+
+  const $ = id => document.getElementById(id);
+
+  // ================= sincronización (Firestore, opcional) =================
+  let fb = null;          // { fs, db, key, unsub }
+  let syncState = 'off';  // off | on | err
+
+  function setSync(state, msg) {
+    syncState = state;
+    $('syncDot').className = 'sync-dot' + (state === 'on' ? ' on' : state === 'err' ? ' err' : '');
+    if (msg) $('syncMsg').textContent = msg;
+    $('storageNote').textContent = localMode + (state === 'on' ? ' · sync: activa' : '');
+  }
+
+  function pushDay(k) {
+    if (!fb) return;
+    const ref = fb.fs.doc(fb.db, 'agendas', fb.key, 'days', k);
+    const d = days[k];
+    if (!d || !dayHasContent(k)) {
+      if (!d) fb.fs.deleteDoc(ref).catch(() => {});
+      else fb.fs.setDoc(ref, serializeDay(d)).catch(() => setSync('err', 'Error al escribir. Revisa las reglas de Firestore.'));
+      return;
+    }
+    fb.fs.setDoc(ref, serializeDay(d)).catch(() => setSync('err', 'Error al escribir. Revisa las reglas de Firestore.'));
+  }
+  // Firestore no admite arrays anidados: los trazos viajan como JSON
+  function serializeDay(d) {
+    return { items: d.items || [], s: JSON.stringify(d.strokes || []), u: d.u || Date.now() };
+  }
+  function deserializeDay(r) {
+    let strokes = [];
+    try { strokes = r.s ? JSON.parse(r.s) : []; } catch (e) {}
+    return { items: r.items || [], strokes, u: r.u || 0 };
+  }
+
+  async function connectSync() {
+    const cfgRaw = (local.getPref('agenda-fb-config') || '').trim();
+    const key = (local.getPref('agenda-sync-key') || '').trim();
+    if (!cfgRaw || !key) return;
+    if (key.length < 30) { setSync('err', 'La clave debe tener al menos 30 caracteres. Usa "generar".'); return; }
+    let cfg;
+    try { cfg = JSON.parse(cfgRaw); } catch (e) { setSync('err', 'El firebaseConfig no es JSON válido.'); return; }
+
+    try {
+      const { initializeApp } = await import('https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js');
+      const fs = await import('https://www.gstatic.com/firebasejs/12.15.0/firebase-firestore.js');
+      const app = initializeApp(cfg);
+      let db;
+      try {
+        db = fs.initializeFirestore(app, { localCache: fs.persistentLocalCache() });
+      } catch (e) {
+        db = fs.getFirestore(app); // fallback si la caché persistente no está disponible
+      }
+      fb = { fs, db, key, unsub: null };
+
+      let firstSnap = true;
+      const col = fs.collection(db, 'agendas', key, 'days');
+      fb.unsub = fs.onSnapshot(col, { includeMetadataChanges: false }, snap => {
+        let changed = false;
+        const remoteKeys = new Set();
+        snap.docChanges().forEach(ch => {
+          const k = ch.doc.id;
+          remoteKeys.add(k);
+          if (ch.doc.metadata.hasPendingWrites) return; // eco de escrituras propias
+          if (ch.type === 'removed') {
+            if (days[k] && k !== viewKey) { delete days[k]; changed = true; }
+            return;
+          }
+          const remote = deserializeDay(ch.doc.data());
+          const localDay = days[k];
+          if (!localDay || (remote.u || 0) > (localDay.u || 0)) {
+            days[k] = remote;
+            changed = true;
+          }
+        });
+        if (firstSnap) {
+          // primera conexión: sube los días locales que el servidor no tenga o tenga más antiguos
+          snap.docs.forEach(d => remoteKeys.add(d.id));
+          Object.keys(days).forEach(k => {
+            if (!remoteKeys.has(k)) pushDay(k);
+          });
+          firstSnap = false;
+        }
+        if (changed) {
+          local.save(days);
+          if (!drawing) render();
+        }
+      }, err => setSync('err', 'Sin acceso a Firestore. Revisa reglas y configuración.'));
+
+      setSync('on', 'Conectado. Los cambios se sincronizan al instante entre dispositivos.');
+    } catch (e) {
+      setSync('err', 'No se pudo cargar Firebase (¿sin conexión la primera vez?).');
+    }
+  }
+
+  // ================= render =================
+  function render() {
+    const isToday = viewKey === todayKey();
+    $('dateNum').textContent = viewKey.replaceAll('-', ' · ');
+    $('dateName').textContent = fmtName(viewKey);
+    $('backToday').classList.toggle('hidden', isToday);
+    renderTasks();
+    resizeSketch();
+    renderSidebar();
+  }
+
+  function renderTasks() {
+    const d = days[viewKey] || { items: [] };
+    const list = $('taskList');
+    list.innerHTML = '';
+    if (d.items.length === 0) {
+      const h = document.createElement('div');
+      h.className = 'empty-hint';
+      h.textContent = viewKey === todayKey() ? 'Página en blanco. Tareas arriba, trazos abajo.' : 'Este día quedó sin notas.';
+      list.appendChild(h);
+    }
+    d.items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'task' + (item.done ? ' done' : '');
+
+      const check = document.createElement('button');
+      check.className = 'check';
+      check.setAttribute('aria-label', item.done ? 'Marcar como pendiente' : 'Marcar como hecha');
+      check.onclick = () => { item.done = !item.done; persist(); render(); };
+
+      const txt = document.createElement('textarea');
+      txt.className = 'task-text'; txt.rows = 1; txt.value = item.text;
+      txt.oninput = () => { autoGrow(txt); item.text = txt.value; persistDebounced(); };
+      txt.onkeydown = e => {
+        if (e.key === 'Enter') { e.preventDefault(); $('newTaskInput').focus(); }
+        if (e.key === 'Backspace' && txt.value === '') { e.preventDefault(); removeItem(item.id); }
+      };
+
+      const del = document.createElement('button');
+      del.className = 'task-del'; del.textContent = '×';
+      del.setAttribute('aria-label', 'Eliminar');
+      del.onclick = () => removeItem(item.id);
+
+      row.append(check, txt, del);
+      list.appendChild(row);
+      autoGrow(txt);
+    });
+  }
+
+  function autoGrow(el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+
+  function renderSidebar() {
+    const keys = Object.keys(days)
+      .filter(k => k !== todayKey() && dayHasContent(k))
+      .sort().reverse();
+    const list = $('dayList');
+    list.innerHTML = '';
+    if (keys.length === 0) {
+      const e = document.createElement('div');
+      e.className = 'sidebar-empty';
+      e.textContent = 'Aún no hay días anteriores.';
+      list.appendChild(e);
+    }
+    keys.forEach(k => {
+      const d = days[k];
+      const items = d.items || [];
+      const done = items.filter(i => i.done).length;
+      const hasSketch = (d.strokes || []).length > 0;
+      const btn = document.createElement('button');
+      btn.className = 'day-item' + (k === viewKey ? ' active' : '');
+      const name = document.createElement('span'); name.className = 'd-name'; name.textContent = fmtShort(k);
+      const meta = document.createElement('span'); meta.className = 'd-meta';
+      let html = '';
+      if (items.length) html += (done === items.length ? '<span class="ok">' + done + '/' + items.length + '</span>' : done + '/' + items.length);
+      if (hasSketch) html += (html ? ' · ' : '') + '✎';
+      meta.innerHTML = html;
+      btn.append(name, meta);
+      btn.onclick = () => { viewKey = k; render(); };
+      list.appendChild(btn);
+    });
+  }
+
+  // ================= tareas =================
+  function addItem(text) {
+    if (!text.trim()) return;
+    day().items.push({ id: uid(), text: text.trim(), done: false });
+    persist(); render();
+  }
+  function removeItem(id) {
+    const d = days[viewKey]; if (!d) return;
+    d.items = d.items.filter(i => i.id !== id);
+    if (!dayHasContent(viewKey) && viewKey !== todayKey()) {
+      delete days[viewKey];
+      local.save(days); pushDay(viewKey);
+      viewKey = todayKey();
+    } else {
+      persist();
+    }
+    render();
+  }
+
+  // ================= dibujo =================
+  // espacio lógico fijo: el mismo dibujo se ve idéntico en iPhone y Mac
+  const LW = 1000, LH = 1000;
+  const canvas = $('sketch');
+  const ctx = canvas.getContext('2d');
+  let drawing = false;
+  let current = null;
+  let penColor = '#1C1C1A';
+  let penSize = 6;
+  let eraser = false;
+  let armed = false; // modo dibujo activo (permite hacer scroll cuando está apagado)
+
+  function resizeSketch() {
+    const w = canvas.parentElement.clientWidth;
+    if (w === 0) return;
+    const scale = w / LW;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(LH * scale * dpr);
+    canvas.style.height = Math.round(LH * scale) + 'px';
+    ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+    redraw();
+  }
+
+  function drawStroke(s) {
+    const p = s.p;
+    ctx.globalCompositeOperation = s.e ? 'destination-out' : 'source-over';
+    if (p.length === 1) {
+      ctx.beginPath();
+      ctx.arc(p[0][0], p[0][1], s.s / 2, 0, Math.PI * 2);
+      ctx.fillStyle = s.c;
+      ctx.fill();
+      return;
+    }
+    ctx.strokeStyle = s.c;
+    ctx.lineWidth = s.s;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(p[0][0], p[0][1]);
+    for (let i = 1; i < p.length - 1; i++) {
+      const mx = (p[i][0] + p[i+1][0]) / 2, my = (p[i][1] + p[i+1][1]) / 2;
+      ctx.quadraticCurveTo(p[i][0], p[i][1], mx, my);
+    }
+    const last = p[p.length - 1];
+    ctx.lineTo(last[0], last[1]);
+    ctx.stroke();
+  }
+
+  function redraw() {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+    ((days[viewKey] || {}).strokes || []).forEach(drawStroke);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  function toLogical(e) {
+    const r = canvas.getBoundingClientRect();
+    return [
+      Math.round(((e.clientX - r.left) / r.width) * LW * 10) / 10,
+      Math.round(((e.clientY - r.top) / r.height) * LH * 10) / 10
+    ];
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    if (!armed) return;
+    e.preventDefault();
+    canvas.setPointerCapture(e.pointerId);
+    drawing = true;
+    current = { c: penColor, s: eraser ? penSize * 3 : penSize, e: eraser ? 1 : 0, p: [toLogical(e)] };
+    if (!day().strokes) day().strokes = [];
+    day().strokes.push(current);
+    redraw();
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!drawing || !current) return;
+    e.preventDefault();
+    const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    events.forEach(ev => current.p.push(toLogical(ev)));
+    redraw();
+  });
+  function endStroke() {
+    if (!drawing) return;
+    drawing = false; current = null;
+    persistDebounced();
+    renderSidebar();
+  }
+  canvas.addEventListener('pointerup', endStroke);
+  canvas.addEventListener('pointercancel', endStroke);
+
+  $('drawToggle').onclick = () => {
+    armed = !armed;
+    $('drawToggle').classList.toggle('on', armed);
+    $('drawToggle').textContent = armed ? '✔ listo' : '✎ dibujar';
+    $('toolbar').classList.toggle('off', !armed);
+    $('sketchWrap').classList.toggle('armed', armed);
+  };
+
+  document.querySelectorAll('.swatch').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('.swatch').forEach(x => x.classList.remove('sel'));
+      b.classList.add('sel');
+      penColor = b.dataset.color;
+      eraser = false;
+      $('eraserBtn').classList.remove('sel');
+    };
+  });
+  document.querySelectorAll('[data-size]').forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll('[data-size]').forEach(x => x.classList.remove('sel'));
+      b.classList.add('sel');
+      penSize = Number(b.dataset.size);
+    };
+  });
+  $('eraserBtn').onclick = () => { eraser = !eraser; $('eraserBtn').classList.toggle('sel', eraser); };
+  $('undoBtn').onclick = () => {
+    (day().strokes || []).pop();
+    redraw(); persistDebounced(); renderSidebar();
+  };
+  $('clearBtn').onclick = () => {
+    if (!confirm('¿Limpiar el dibujo de este día?')) return;
+    day().strokes = [];
+    redraw(); persist(); renderSidebar();
+  };
+
+  // ================= exportar / importar =================
+  $('exportBtn').onclick = () => {
+    const blob = new Blob([JSON.stringify(days)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'agenda-backup-' + todayKey() + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+  $('importBtn').onclick = () => $('importFile').click();
+  $('importFile').onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const data = JSON.parse(r.result);
+        if (typeof data !== 'object' || data === null) throw 0;
+        Object.keys(data).forEach(k => {
+          const remote = data[k];
+          if (!days[k] || (remote.u || 0) > (days[k].u || 0)) {
+            days[k] = remote;
+            pushDay(k);
+          }
+        });
+        local.save(days); render();
+        alert('Copia importada.');
+      } catch (err) { alert('El archivo no es una copia válida.'); }
+    };
+    r.readAsText(f);
+    e.target.value = '';
+  };
+
+  // ================= sync UI =================
+  $('genKey').onclick = () => {
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let k = '';
+    const rnd = new Uint32Array(40); crypto.getRandomValues(rnd);
+    for (let i = 0; i < 40; i++) k += chars[rnd[i] % chars.length];
+    $('syncKey').value = k;
+  };
+  $('connectBtn').onclick = () => {
+    local.setPref('agenda-fb-config', $('fbConfig').value.trim());
+    local.setPref('agenda-sync-key', $('syncKey').value.trim());
+    if (fb && fb.unsub) { fb.unsub(); fb = null; }
+    setSync('off', 'Conectando…');
+    connectSync();
+  };
+
+  // ================= eventos generales =================
+  $('newTaskInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { addItem(e.target.value); e.target.value = ''; }
+  });
+  $('backToday').onclick = () => { viewKey = todayKey(); render(); };
+  $('toggleBtn').onclick = () => {
+    const open = $('sidebar').classList.toggle('open');
+    $('toggleBtn').textContent = open ? 'días ▸' : 'días ◂';
+    $('toggleBtn').setAttribute('aria-expanded', open);
+    if (!open) resizeSketch();
+  };
+  window.addEventListener('resize', resizeSketch);
+  setInterval(() => {
+    if (viewKey !== todayKey() && !days[viewKey]) { viewKey = todayKey(); render(); }
+  }, 60000);
+
+  // ================= init =================
+  days = local.load();
+  if (typeof days !== 'object' || days === null) days = {};
+  $('fbConfig').value = local.getPref('agenda-fb-config') || '';
+  $('syncKey').value = local.getPref('agenda-sync-key') || '';
+  $('storageNote').textContent = localMode;
+  render();
+  connectSync();
+
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "Agenda",
+  "short_name": "Agenda",
+  "description": "Agenda diaria con lista de tareas y lienzo de dibujo",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FBFBF9",
+  "theme_color": "#FBFBF9",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
