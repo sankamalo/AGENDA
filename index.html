@@ -36,6 +36,8 @@
   .scroll-area {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;               /* sin scroll horizontal: todo cabe en el ancho */
+    overscroll-behavior-x: none;
     -webkit-overflow-scrolling: touch;
     padding: calc(20px + env(safe-area-inset-top)) 20px 160px;
   }
@@ -86,29 +88,45 @@
   .tab-new { border-style: dashed; color: var(--ink-soft); font-size: 15px; }
   .tab-new:hover { color: var(--verde); }
 
-  /* fotos libres (dentro de una pestaña de pensamiento).
-     Se pintan como fondo (no <img>) para que iOS no las secuestre al pulsar largo. */
+  /* elementos libres (fotos y notas de texto) dentro de un pensamiento.
+     Las fotos se pintan como fondo (no <img>) para que iOS no las secuestre. */
   .free-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
-  .free-photo {
-    position: absolute; pointer-events: auto; border-radius: 10px; overflow: hidden;
-    background: var(--panel) center/cover no-repeat; box-shadow: 0 2px 12px rgba(0,0,0,.14);
-    touch-action: none; cursor: grab;
+  .free-item {
+    position: absolute; pointer-events: auto; touch-action: none;
     -webkit-user-select: none; user-select: none;
     -webkit-touch-callout: none; -webkit-user-drag: none;
   }
-  .free-photo.grabbing { box-shadow: 0 8px 26px rgba(0,0,0,.28); z-index: 3; }
-  .free-photo .ph-handle {
-    position: absolute; width: 36px; height: 36px; touch-action: none; -webkit-touch-callout: none;
+  .free-item.grabbing { z-index: 4; }
+  .free-photo {
+    border-radius: 10px; overflow: hidden; cursor: grab;
+    background: var(--panel) center/cover no-repeat; box-shadow: 0 2px 12px rgba(0,0,0,.14);
+  }
+  .free-photo.grabbing { box-shadow: 0 8px 26px rgba(0,0,0,.28); }
+  .free-note {
+    background: #FFFDF5; border: 1px solid var(--ink-faint); border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.10); padding: 12px 14px;
+  }
+  .free-note .note-text {
+    width: 100%; border: none; outline: none; background: none; resize: none; overflow: hidden;
+    font-family: inherit; font-size: 16px; line-height: 1.4; color: var(--ink);
+    -webkit-user-select: text; user-select: text; touch-action: auto;
+  }
+  .free-note .note-text::placeholder { color: var(--ink-faint); }
+
+  /* asas SUTILES: puntitos en las esquinas, fuera del contenido, no lo tapan */
+  .fi-handle {
+    position: absolute; width: 20px; height: 20px; border-radius: 50%;
+    touch-action: none; -webkit-touch-callout: none;
     display: flex; align-items: center; justify-content: center;
-    color: #fff; font-size: 15px; line-height: 1;
+    color: #fff; font-size: 11px; line-height: 1;
+    background: var(--verde); box-shadow: 0 1px 3px rgba(0,0,0,.4);
+    opacity: .5; transition: opacity .15s;
   }
-  .free-photo .ph-move {
-    left: 6px; top: 6px; border-radius: 50%; cursor: move;
-    background: rgba(31,122,77,.92); box-shadow: 0 1px 4px rgba(0,0,0,.35);
-  }
-  .free-photo .ph-resize {
-    right: 0; bottom: 0; cursor: nwse-resize;
-    background: radial-gradient(circle at 74% 74%, rgba(31,122,77,.95) 0 9px, transparent 9px);
+  .fi-handle:hover, .free-item.grabbing .fi-handle, .free-item:hover .fi-handle { opacity: 1; }
+  .fi-move   { left: -8px;  top: -8px;    cursor: move; }
+  .fi-resize { right: -8px; bottom: -8px; cursor: nwse-resize; }
+  .fi-del {
+    right: -8px; top: -8px; background: rgba(0,0,0,.55); border: none; padding: 0; cursor: pointer;
   }
 
   /* tareas / notas */
@@ -231,6 +249,13 @@
   @media (max-width: 640px) {
     .sidebar.open { width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 50; }
     .date-name { font-size: 22px; }
+    /* barra de dibujo compacta en iPhone (que no se achate) */
+    .dock { left: 8px; right: 8px; transform: none; justify-content: center; }
+    .dock-tools { gap: 5px; padding: 6px 7px; max-width: 100%; }
+    .swatch { width: 22px; height: 22px; }
+    .tool-btn { font-size: 11px; padding: 5px 7px; }
+    .dock-sep { height: 18px; }
+    .draw-fab { width: 46px; height: 46px; font-size: 18px; }
   }
 </style>
 </head>
@@ -256,6 +281,7 @@
             <span class="ghost-check"></span>
             <input type="text" id="newTaskInput" placeholder="Añadir tarea o nota…" autocomplete="off">
             <button class="mini-btn hidden" id="micBtn" title="Dictar" aria-label="Dictar">🎙</button>
+            <button class="mini-btn" id="noteBtn" title="Añadir nota de texto" aria-label="Añadir nota de texto">💬</button>
             <button class="mini-btn" id="photoBtn" title="Añadir foto" aria-label="Añadir foto">📷</button>
             <input type="file" id="photoInput" accept="image/*" class="hidden">
           </div>
@@ -606,6 +632,8 @@
     let maxY = 0;
     (curRead().strokes||[]).forEach(s => s.p.forEach(pt => { if (pt[1] > maxY) maxY = pt[1]; }));
     (day().photos||[]).filter(p => p.tab === viewTab).forEach(p => { const b = (p.y||0)+(p.h||p.w||0); if (b > maxY) maxY = b; });
+    const tab = (day().tabs||[]).find(t => t.id === viewTab);
+    if (tab) (tab.notes||[]).forEach(n => { const el = photoEls.get(n.id); const hPx = el ? el.offsetHeight : 60; const b = (n.y||0) + hPx/w*LW; if (b > maxY) maxY = b; });
     const contentPx = maxY / LW * w;
     const floor = Math.max(window.innerHeight * 1.5, 1100);
     sheet.style.minHeight = Math.round(Math.max(floor, contentPx + 500)) + 'px';
@@ -724,84 +752,121 @@
     // toda foto real vive dentro de un pensamiento (posición libre); la rejilla
     // clásica ya no se usa. Se mantiene oculta (datos heredados sin tab).
     $('photos').classList.add('hidden');
-    renderFreePhotos();
+    renderFreeItems();
   }
 
-  // fotos sueltas dentro de una pestaña (posición libre en coordenadas lógicas)
-  function positionPhoto(el, p) {
-    el.style.left = (p.x/LW*100) + '%';
-    el.style.top = (p.y/LW*cssW) + 'px';
-    el.style.width = (p.w/LW*100) + '%';
-    el.style.aspectRatio = (p.w||1) + ' / ' + (p.h||p.w||1);
+  // clamp horizontal: el elemento no se sale del ancho de la hoja (simétrico izq/der)
+  function clampX(x, w) { return Math.max(0, Math.min(x, Math.max(0, LW - w))); }
+  function positionItem(el, it, isPhoto) {
+    el.style.left = (clampX(it.x, it.w)/LW*100) + '%';
+    el.style.top = (it.y/LW*cssW) + 'px';
+    el.style.width = (it.w/LW*100) + '%';
+    if (isPhoto) el.style.aspectRatio = (it.w||1) + ' / ' + (it.h||it.w||1);
   }
-  function savePhotoPos(p) { p.u = Date.now(); local.save(days); pushPhoto(HOME, p); movingFree=false; updateSheetHeight(); resizeInk(); }
-  function renderFreePhotos() {
+  function saveItem(it, isPhoto) {
+    movingFree = false;
+    if (isPhoto) { it.u = Date.now(); local.save(days); pushPhoto(HOME, it); }
+    else persist();
+    updateSheetHeight(); resizeInk();
+  }
+  function mkHandle(cls, txt, title) { const h=document.createElement('div'); h.className='fi-handle '+cls; if(txt)h.textContent=txt; h.title=title; return h; }
+  function mkDel(fn) { const b=document.createElement('button'); b.className='fi-handle fi-del'; b.textContent='×'; b.setAttribute('aria-label','Eliminar'); b.onpointerdown=ev=>ev.stopPropagation(); b.onclick=ev=>{ ev.stopPropagation(); fn(); }; return b; }
+  function isHandle(t) { return t && t.classList && (t.classList.contains('fi-handle') || t.classList.contains('note-text')); }
+
+  function renderFreeItems() {
     const layer = $('freeLayer'); layer.innerHTML = ''; photoEls.clear();
     if (!viewTab) return;
     const d = days[HOME] || {};
+    const tab = (d.tabs||[]).find(t => t.id === viewTab);
+    // --- fotos ---
     (d.photos||[]).filter(p => p.tab === viewTab).forEach(p => {
       if (p.x == null) { p.x = 60; p.y = 60; p.w = 420; p.h = p.h || 420; }
-      const el = document.createElement('div'); el.className = 'free-photo';
+      const el = document.createElement('div'); el.className = 'free-item free-photo';
       el.style.backgroundImage = 'url("' + p.img + '")';
-      positionPhoto(el, p);
-      el.addEventListener('contextmenu', ev => ev.preventDefault()); // sin menú "guardar imagen" en iOS
-      const move = document.createElement('div'); move.className = 'ph-handle ph-move'; move.textContent = '✥'; move.title = 'Mover';
-      const del = document.createElement('button'); del.className = 'photo-del'; del.textContent = '×';
-      del.setAttribute('aria-label','Eliminar foto');
-      del.onpointerdown = ev => ev.stopPropagation();
-      del.onclick = ev => { ev.stopPropagation(); removePhoto(p.id); };
-      const grip = document.createElement('div'); grip.className = 'ph-handle ph-resize'; grip.title = 'Redimensionar';
+      positionItem(el, p, true);
+      el.addEventListener('contextmenu', ev => ev.preventDefault());
+      const move = mkHandle('fi-move','✥','Mover');
+      const del = mkDel(() => removePhoto(p.id));
+      const grip = mkHandle('fi-resize','','Redimensionar');
       el.append(move, del, grip); layer.appendChild(el); photoEls.set(p.id, el);
-      attachFreePhotoGestures(el, move, grip, p);
+      el.addEventListener('click', e => { if (isHandle(e.target)) return; $('lightboxImg').src = p.img; $('lightbox').classList.add('show'); });
+      attachMove(el, move, p, true);
+      attachResize(el, grip, p, true);
+    });
+    // --- notas de texto ---
+    if (tab) (tab.notes||[]).forEach(n => {
+      if (n.x == null) { n.x = 80; n.y = 80; n.w = 360; }
+      const el = document.createElement('div'); el.className = 'free-item free-note';
+      positionItem(el, n, false);
+      const ta = document.createElement('textarea'); ta.className = 'note-text'; ta.rows = 1; ta.value = n.text||''; ta.placeholder = 'Escribe…';
+      ta.addEventListener('input', () => { autoGrow(ta); n.text = ta.value; persistDebounced(); updateSheetHeight(); });
+      ta.addEventListener('pointerdown', e => e.stopPropagation()); // editar sin arrastrar
+      const move = mkHandle('fi-move','✥','Mover');
+      const del = mkDel(() => removeNote(n.id));
+      const grip = mkHandle('fi-resize','','Ancho');
+      el.append(ta, move, del, grip); layer.appendChild(el); photoEls.set(n.id, el);
+      autoGrow(ta);
+      attachMove(el, move, n, false);
+      attachResize(el, grip, n, false);
     });
   }
 
-  // dentro del pensamiento: asa ✥ (arriba-izq) mueve; asa (abajo-der) redimensiona;
-  // toque en la foto = verla grande. Con asas dedicadas iOS no secuestra el gesto.
-  function attachFreePhotoGestures(el, move, grip, p) {
-    // toque corto sobre la foto -> lightbox
-    el.addEventListener('click', e => {
-      if (e.target === move || e.target === grip || (e.target.classList && e.target.classList.contains('photo-del'))) return;
-      $('lightboxImg').src = p.img; $('lightbox').classList.add('show');
-    });
-    // --- mover (asa ✥) ---
-    let mId=null, msx=0, msy=0, ox=0, oy=0;
-    move.addEventListener('pointerdown', e => {
+  // asa ✥ (arriba-izq) = mover; asa (abajo-der) = tamaño. Asas dedicadas para
+  // que iOS no secuestre el gesto y para no tapar el contenido.
+  function attachMove(el, handle, it, isPhoto) {
+    let id=null, sx=0, sy=0, ox=0, oy=0;
+    handle.addEventListener('pointerdown', e => {
       e.stopPropagation(); e.preventDefault();
-      mId=e.pointerId; msx=e.clientX; msy=e.clientY; ox=p.x; oy=p.y;
-      move.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing');
+      id=e.pointerId; sx=e.clientX; sy=e.clientY; ox=it.x; oy=it.y;
+      handle.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing');
       sfx('pickup'); if (navigator.vibrate) navigator.vibrate(10);
     });
-    move.addEventListener('pointermove', e => {
-      if (e.pointerId !== mId) return; e.preventDefault();
-      p.x = Math.max(0, ox + (e.clientX-msx)/cssW*LW);
-      p.y = Math.max(0, oy + (e.clientY-msy)/cssW*LW);
-      positionPhoto(el, p);
-      updateSheetHeight(); // crece la hoja si arrastras hacia abajo
+    handle.addEventListener('pointermove', e => {
+      if (e.pointerId !== id) return; e.preventDefault();
+      it.x = clampX(ox + (e.clientX-sx)/cssW*LW, it.w);
+      it.y = Math.max(0, oy + (e.clientY-sy)/cssW*LW);
+      positionItem(el, it, isPhoto); updateSheetHeight();
     });
-    move.addEventListener('pointerup', e => { if (e.pointerId!==mId) return; mId=null; el.classList.remove('grabbing'); sfx('drop'); savePhotoPos(p); });
-    move.addEventListener('pointercancel', e => { mId=null; movingFree=false; el.classList.remove('grabbing'); });
-    // --- redimensionar (asa) : el aspecto se fija al empezar, no se recalcula ---
-    let rId=null, rsx=0, rsW=0, aspect0=1;
-    grip.addEventListener('pointerdown', e => {
+    handle.addEventListener('pointerup', e => { if (e.pointerId!==id) return; id=null; el.classList.remove('grabbing'); sfx('drop'); saveItem(it, isPhoto); });
+    handle.addEventListener('pointercancel', e => { id=null; movingFree=false; el.classList.remove('grabbing'); });
+  }
+  function attachResize(el, handle, it, isPhoto) {
+    let id=null, sx=0, sW=0, aspect0=1;
+    handle.addEventListener('pointerdown', e => {
       e.stopPropagation(); e.preventDefault();
-      rId=e.pointerId; rsx=e.clientX; rsW=p.w; aspect0 = (p.h && p.w) ? p.h/p.w : 1;
-      grip.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing'); sfx('pickup');
+      id=e.pointerId; sx=e.clientX; sW=it.w; aspect0 = (isPhoto && it.h && it.w) ? it.h/it.w : 1;
+      handle.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing'); sfx('pickup');
     });
-    grip.addEventListener('pointermove', e => {
-      if (e.pointerId !== rId) return; e.preventDefault();
-      p.w = Math.max(120, Math.min(LW, rsW + (e.clientX-rsx)/cssW*LW));
-      p.h = Math.round(p.w * aspect0);
-      positionPhoto(el, p);
+    handle.addEventListener('pointermove', e => {
+      if (e.pointerId !== id) return; e.preventDefault();
+      it.w = Math.max(isPhoto?120:140, Math.min(LW, sW + (e.clientX-sx)/cssW*LW));
+      if (isPhoto) it.h = Math.round(it.w * aspect0);
+      positionItem(el, it, isPhoto); updateSheetHeight();
     });
-    grip.addEventListener('pointerup', e => { if (e.pointerId!==rId) return; rId=null; el.classList.remove('grabbing'); sfx('drop'); savePhotoPos(p); });
-    grip.addEventListener('pointercancel', e => { rId=null; movingFree=false; el.classList.remove('grabbing'); });
+    handle.addEventListener('pointerup', e => { if (e.pointerId!==id) return; id=null; el.classList.remove('grabbing'); sfx('drop'); saveItem(it, isPhoto); });
+    handle.addEventListener('pointercancel', e => { id=null; movingFree=false; el.classList.remove('grabbing'); });
   }
   function repositionPhotos() {
+    const d = days[HOME] || {}; const tab = (d.tabs||[]).find(t => t.id === viewTab);
     photoEls.forEach((el, id) => {
-      const p = (days[HOME].photos||[]).find(p => p.id === id);
-      if (p) positionPhoto(el, p);
+      let it = (d.photos||[]).find(p => p.id === id), isPhoto = true;
+      if (!it && tab) { it = (tab.notes||[]).find(n => n.id === id); isPhoto = false; }
+      if (it) positionItem(el, it, isPhoto);
     });
+  }
+  function createNote() {
+    const tab = cur(); if (!tab || !viewTab) return;
+    if (!tab.notes) tab.notes = [];
+    const y = Math.max(0, Math.round(scrollArea.scrollTop / cssW * LW)) + 120;
+    const n = { id: uid(), text:'', x: 60, y, w: 360, created: todayKey() };
+    tab.notes.push(n);
+    sfx('create'); persist(); render();
+    setTimeout(() => { const el = photoEls.get(n.id); const ta = el && el.querySelector('.note-text'); if (ta) ta.focus(); }, 40);
+  }
+  function removeNote(id) {
+    const tab = cur(); if (!tab || !tab.notes) return;
+    tab.notes = tab.notes.filter(n => n.id !== id);
+    persist(); render();
   }
 
   // ================= tareas =================
@@ -976,7 +1041,7 @@
     else if (gesture==='move' && pointers.size===1 && moveTarget) {
       const pt = toLogical(e); const dx = pt[0]-lastPt[0], dy = pt[1]-lastPt[1]; lastPt = pt;
       if (moveTarget.type === 'stroke') { moveTarget.s.p.forEach(p => { p[0]+=dx; p[1]+=dy; }); redraw(); }
-      else { const p = moveTarget.p; p.x+=dx; p.y+=dy; const el = photoEls.get(p.id); if (el) positionPhoto(el, p); }
+      else { const p = moveTarget.p; p.x+=dx; p.y+=dy; const el = photoEls.get(p.id); if (el) positionItem(el, p, true); }
     }
   });
   function liftPointer(e) {
@@ -1029,6 +1094,7 @@
 
   // ================= fotos: botón =================
   $('photoBtn').onclick = () => $('photoInput').click();
+  $('noteBtn').onclick = createNote;
   $('photoInput').onchange = e => { const f = e.target.files[0]; addPhotoFile(f); e.target.value=''; };
 
   // lightbox cerrar
