@@ -40,12 +40,16 @@
     padding: calc(20px + env(safe-area-inset-top)) 20px 160px;
   }
   .page { max-width: 640px; margin: 0 auto; }
+  /* dentro de un pensamiento la hoja usa TODO el ancho de la pantalla:
+     el texto se queda en su columna legible, pero el lienzo y las fotos
+     libres pueden ir de lado a lado (importante en Mac). */
+  .page.wide { max-width: none; margin: 0; }
 
   /* la hoja: contenido en flujo + lienzo superpuesto.
      min-height para poder dibujar en toda la pantalla aunque haya poco texto.
      Dentro de un pensamiento la altura la fija el JS (lienzo grande y crece solo). */
   .sheet { position: relative; min-height: calc(100vh - 210px); min-height: calc(100dvh - 210px); }
-  .content { position: relative; z-index: 1; }
+  .content { position: relative; z-index: 1; max-width: 640px; }
   .ink { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; display: block; }
   .ink.write { pointer-events: none; touch-action: auto; }
   .ink.draw  { pointer-events: auto; touch-action: none; cursor: crosshair; }
@@ -233,7 +237,7 @@
 <body>
 <div class="app">
   <main class="scroll-area" id="scrollArea">
-    <div class="page">
+    <div class="page" id="page">
       <div class="sheet" id="sheet">
         <canvas class="ink write" id="ink"></canvas>
         <div class="content" id="content">
@@ -576,6 +580,9 @@
     if (inTab) $('tabDate').textContent = tab.created ? ('creado ' + fmtShort(tab.created)) : '';
     $('exitTab').classList.toggle('hidden', !inTab);
     $('moveBtn').classList.toggle('hidden', !inTab);
+
+    // dentro de un pensamiento la hoja usa todo el ancho de la pantalla
+    $('page').classList.toggle('wide', inTab);
 
     // escribir / dibujar / fotos SOLO dentro de un pensamiento; la hoja principal es solo el índice
     $('newTaskRow').classList.toggle('hidden', !inTab);
