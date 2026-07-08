@@ -41,8 +41,9 @@
   }
   .page { max-width: 640px; margin: 0 auto; }
 
-  /* la hoja: contenido en flujo + lienzo superpuesto */
-  .sheet { position: relative; }
+  /* la hoja: contenido en flujo + lienzo superpuesto.
+     min-height para poder dibujar en toda la pantalla aunque haya poco texto */
+  .sheet { position: relative; min-height: calc(100vh - 210px); min-height: calc(100dvh - 210px); }
   .content { position: relative; z-index: 1; }
   .ink { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; display: block; }
   .ink.write { pointer-events: none; touch-action: auto; }
@@ -60,6 +61,29 @@
   .readonly-tag:hover { color: var(--verde); border-color: var(--verde); }
   .rule { height: 1px; background: var(--ink-faint); margin: 18px 0 10px; }
   .hidden { display: none !important; }
+
+  /* pestañas de pensamiento */
+  .tabs-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0 4px; }
+  .tab-chip {
+    display: flex; align-items: center; gap: 8px;
+    border-radius: 999px; border: 1px solid var(--ink-faint); background: var(--paper);
+    padding: 8px 14px; font-size: 14px; font-family: inherit; color: var(--ink); cursor: pointer;
+  }
+  .tab-chip:hover { border-color: var(--verde); }
+  .tab-chip .t-name::first-letter { text-transform: uppercase; }
+  .tab-chip .t-meta { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); }
+  .tab-chip .t-del { color: var(--ink-soft); font-size: 15px; line-height: 1; padding: 0 2px; }
+  .tab-chip .t-del:hover { color: var(--ink); }
+  .tab-new { border-style: dashed; color: var(--ink-soft); }
+  .tab-new:hover { color: var(--verde); }
+
+  /* fotos libres (dentro de una pestaña de pensamiento) */
+  .free-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+  .free-photo {
+    position: absolute; pointer-events: auto; border-radius: 10px; overflow: hidden;
+    background: var(--panel); box-shadow: 0 2px 12px rgba(0,0,0,.14);
+  }
+  .free-photo img { width: 100%; display: block; cursor: zoom-in; }
 
   /* tareas / notas */
   .task { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; }
@@ -119,6 +143,7 @@
   .dock { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 40; display: flex; align-items: center; gap: 8px; }
   .dock-tools {
     display: none; align-items: center; gap: 6px;
+    flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 92px);
     background: var(--paper); border: 1px solid var(--ink-faint);
     border-radius: 12px; padding: 7px 9px; box-shadow: 0 4px 16px rgba(0,0,0,.10);
   }
@@ -155,6 +180,7 @@
   .sidebar.open { width: 292px; }
   @media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
   .sidebar-inner { width: 292px; padding: calc(64px + env(safe-area-inset-top)) 0 24px; overflow-y: auto; flex: 1; }
+  .sidebar-close { margin: 0 22px 14px; }
   .sidebar-title { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-soft); padding: 0 22px 12px; }
   .day-item { display: flex; justify-content: space-between; align-items: baseline; width: 100%; text-align: left; border: none; background: none; padding: 10px 22px; cursor: pointer; font-family: inherit; }
   .day-item:hover { background: var(--verde-soft); }
@@ -192,8 +218,10 @@
           <div class="date-line">
             <h1 class="date-name" id="dateName"></h1>
             <button class="readonly-tag hidden" id="backToday">← volver a hoy</button>
+            <button class="readonly-tag hidden" id="exitTab">← volver al día</button>
           </div>
           <div class="rule"></div>
+          <div class="tabs-row hidden" id="tabsRow"></div>
 
           <div id="taskList"></div>
           <div class="new-task">
@@ -206,6 +234,7 @@
 
           <div class="photos hidden" id="photos"></div>
         </div>
+        <div class="free-layer" id="freeLayer"></div>
       </div>
     </div>
   </main>
@@ -223,6 +252,7 @@
       <button class="tool-btn" data-size="14">●</button>
       <span class="dock-sep"></span>
       <button class="tool-btn" id="eraserBtn">goma</button>
+      <button class="tool-btn hidden" id="moveBtn">✥ mover</button>
       <button class="tool-btn" id="undoBtn">↶</button>
       <button class="tool-btn" id="clearBtn">✕</button>
     </div>
@@ -235,6 +265,7 @@
 
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-inner">
+      <button class="tool-btn sidebar-close" id="sidebarClose">✕ salir</button>
       <div class="sidebar-title">Días anteriores</div>
       <div id="dayList"></div>
 
@@ -281,17 +312,23 @@
   };
 
   // ================= estado =================
-  // days[k] = { items:[{id,text,done}], strokes:[{c,s,e,p:[[x,y]..]}], photos:[{id,img,u}], u }
+  // days[k] = { items:[{id,text,done}], strokes:[{c,s,e,p:[[x,y]..]}],
+  //             photos:[{id,img,u,tab?,x?,y?,w?,h?}],   // x/y/w/h lógicas si la foto va suelta en una pestaña
+  //             tabs:[{id,name,items,strokes}], u }
   let days = {};
   let viewKey = todayKey();
+  let viewTab = null; // id de la pestaña de pensamiento abierta (null = hoja del día)
 
   function todayKey() { const d = new Date(); const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
   function keyToDate(k) { const [y,m,d] = k.split('-').map(Number); return new Date(y, m-1, d); }
   function fmtName(k)  { return keyToDate(k).toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'long' }); }
   function fmtShort(k) { return keyToDate(k).toLocaleDateString('es-ES', { weekday:'short', day:'numeric', month:'short' }); }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
-  function day() { if (!days[viewKey]) days[viewKey] = { items:[], strokes:[], photos:[], u:0 }; return days[viewKey]; }
-  function dayHasContent(k) { const d = days[k]; if (!d) return false; return (d.items&&d.items.length) || (d.strokes&&d.strokes.length) || (d.photos&&d.photos.length); }
+  function day() { if (!days[viewKey]) days[viewKey] = { items:[], strokes:[], photos:[], tabs:[], u:0 }; return days[viewKey]; }
+  function dayHasContent(k) { const d = days[k]; if (!d) return false; return (d.items&&d.items.length) || (d.strokes&&d.strokes.length) || (d.photos&&d.photos.length) || (d.tabs&&d.tabs.length); }
+  // contenedor activo: la pestaña de pensamiento abierta o la hoja del día
+  function cur() { const d = day(); if (viewTab) { const t = (d.tabs||[]).find(t => t.id === viewTab); if (t) return t; viewTab = null; } return d; }
+  function curRead() { const d = days[viewKey]; if (!d) return { items:[], strokes:[] }; if (viewTab) { const t = (d.tabs||[]).find(t => t.id === viewTab); if (t) return t; } return d; }
 
   let saveTimer = null;
   function persist(k) { k = k || viewKey; if (days[k]) days[k].u = Date.now(); local.save(days); pushDay(k); }
@@ -307,8 +344,14 @@
     $('storageNote').textContent = localMode + (state==='on'?' · sync: activa':'');
   }
 
-  function serializeDay(d) { return { items: d.items||[], s: JSON.stringify(d.strokes||[]), u: d.u||Date.now() }; }
-  function deserializeDay(r) { let s=[]; try { s = r.s ? JSON.parse(r.s) : []; } catch(e){} return { items: r.items||[], strokes: s, u: r.u||0 }; }
+  // las pestañas también viajan como string JSON ('t'): sus strokes tienen arrays anidados
+  function serializeDay(d) { return { items: d.items||[], s: JSON.stringify(d.strokes||[]), t: JSON.stringify(d.tabs||[]), u: d.u||Date.now() }; }
+  function deserializeDay(r) {
+    let s=[], t=[];
+    try { s = r.s ? JSON.parse(r.s) : []; } catch(e){}
+    try { t = r.t ? JSON.parse(r.t) : []; } catch(e){}
+    return { items: r.items||[], strokes: s, tabs: t, u: r.u||0 };
+  }
 
   function pushDay(k) {
     if (!fb) return;
@@ -320,7 +363,10 @@
   function pushPhoto(dayKey, photo) {
     if (!fb) return;
     const ref = fb.fs.doc(fb.db, 'agendas', fb.key, 'photos', photo.id);
-    fb.fs.setDoc(ref, { day: dayKey, img: photo.img, u: photo.u }).catch(()=> setSync('err','No se pudo subir la foto. ¿Actualizaste las reglas a la versión con {document=**}?'));
+    const doc = { day: dayKey, img: photo.img, u: photo.u };
+    if (photo.tab) doc.tab = photo.tab;
+    if (photo.x != null) { doc.x = photo.x; doc.y = photo.y; doc.w = photo.w; doc.h = photo.h || photo.w; }
+    fb.fs.setDoc(ref, doc).catch(()=> setSync('err','No se pudo subir la foto. ¿Actualizaste las reglas a la versión con {document=**}?'));
   }
   function deletePhotoRemote(id) {
     if (!fb) return;
@@ -387,10 +433,10 @@
         });
         if (firstDays) {
           snap.docs.forEach(d => remote.add(d.id));
-          Object.keys(days).forEach(k => { if (!remote.has(k) && ((days[k].items&&days[k].items.length)||(days[k].strokes&&days[k].strokes.length))) pushDay(k); });
+          Object.keys(days).forEach(k => { if (!remote.has(k) && ((days[k].items&&days[k].items.length)||(days[k].strokes&&days[k].strokes.length)||(days[k].tabs&&days[k].tabs.length))) pushDay(k); });
           firstDays = false;
         }
-        if (changed) { local.save(days); if (!drawing) render(); }
+        if (changed) { local.save(days); if (!drawing && !moveTarget) render(); }
       }, () => setSync('err','Sin acceso a Firestore. Revisa reglas y configuración.'));
 
       // ---- fotos (una por documento, para no superar 1 MB) ----
@@ -408,9 +454,19 @@
             const before = days[dk].photos.length;
             days[dk].photos = days[dk].photos.filter(p => p.id !== id);
             if (days[dk].photos.length !== before) changed = true;
-          } else if (!days[dk].photos.some(p => p.id === id)) {
-            days[dk].photos.push({ id, img: data.img, u: data.u||0 });
-            changed = true;
+          } else {
+            const ex = days[dk].photos.find(p => p.id === id);
+            if (!ex) {
+              const p = { id, img: data.img, u: data.u||0 };
+              if (data.tab) p.tab = data.tab;
+              if (data.x != null) { p.x = data.x; p.y = data.y; p.w = data.w; p.h = data.h; }
+              days[dk].photos.push(p); changed = true;
+            } else if ((data.u||0) > (ex.u||0)) {
+              ex.u = data.u||0; ex.img = data.img;
+              if (data.tab) ex.tab = data.tab; else delete ex.tab;
+              if (data.x != null) { ex.x = data.x; ex.y = data.y; ex.w = data.w; ex.h = data.h; }
+              changed = true;
+            }
           }
         });
         if (firstPhotos) {
@@ -418,7 +474,7 @@
           Object.keys(days).forEach(k => (days[k].photos||[]).forEach(p => { if (!remote.has(p.id)) pushPhoto(k, p); }));
           firstPhotos = false;
         }
-        if (changed) { local.save(days); if (!drawing) render(); }
+        if (changed) { local.save(days); if (!drawing && !moveTarget) render(); }
       }, () => {});
 
       setSync('on','Conectado. Los cambios se sincronizan al instante entre dispositivos.');
@@ -430,16 +486,71 @@
   // ================= render =================
   function render() {
     const isToday = viewKey === todayKey();
-    $('dateName').textContent = fmtName(viewKey);
-    $('backToday').classList.toggle('hidden', isToday);
+    const d = days[viewKey];
+    let tab = null;
+    if (viewTab) { tab = ((d && d.tabs) || []).find(t => t.id === viewTab) || null; if (!tab) viewTab = null; }
+    $('dateName').textContent = tab ? (tab.name || 'pensamiento') : fmtName(viewKey);
+    $('dateName').style.cursor = tab ? 'pointer' : '';
+    $('dateName').title = tab ? 'Tocar para renombrar' : '';
+    $('backToday').classList.toggle('hidden', isToday || !!tab);
+    $('exitTab').classList.toggle('hidden', !tab);
+    $('moveBtn').classList.toggle('hidden', !tab);
+    if (!tab && tool === 'move') setTool('pen');
+    renderTabs();
     renderTasks();
     renderPhotos();
     resizeInk();
     renderSidebar();
   }
 
+  // ================= pestañas de pensamiento =================
+  function renderTabs() {
+    const row = $('tabsRow');
+    row.innerHTML = '';
+    row.classList.toggle('hidden', !!viewTab);
+    if (viewTab) return;
+    const d = days[viewKey] || {};
+    (d.tabs||[]).forEach(t => {
+      const chip = document.createElement('button'); chip.className = 'tab-chip';
+      const nm = document.createElement('span'); nm.className = 't-name'; nm.textContent = t.name || 'pensamiento';
+      const items = t.items||[]; const done = items.filter(i=>i.done).length;
+      let m = ''; if (items.length) m += done+'/'+items.length;
+      if ((t.strokes||[]).length) m += (m?' · ':'')+'✎';
+      if ((d.photos||[]).some(p => p.tab === t.id)) m += (m?' · ':'')+'📷';
+      chip.appendChild(nm);
+      if (m) { const meta = document.createElement('span'); meta.className='t-meta'; meta.textContent = m; chip.appendChild(meta); }
+      const del = document.createElement('span'); del.className='t-del'; del.textContent='×';
+      del.onclick = ev => { ev.stopPropagation(); deleteTab(t.id); };
+      chip.appendChild(del);
+      chip.onclick = () => { viewTab = t.id; render(); };
+      row.appendChild(chip);
+    });
+    const add = document.createElement('button'); add.className = 'tab-chip tab-new'; add.textContent = '+ pensamiento';
+    add.onclick = createTab;
+    row.appendChild(add);
+  }
+  function createTab() {
+    const name = prompt('Nombre del pensamiento', '');
+    if (name === null) return;
+    const t = { id: uid(), name: name.trim() || 'pensamiento', items: [], strokes: [] };
+    const d = day(); if (!d.tabs) d.tabs = [];
+    d.tabs.push(t);
+    viewTab = t.id;
+    persist(); render();
+  }
+  function deleteTab(id) {
+    const d = days[viewKey]; if (!d) return;
+    const t = (d.tabs||[]).find(t => t.id === id);
+    if (!confirm('¿Eliminar el pensamiento' + (t && t.name ? ' «'+t.name+'»' : '') + '? Se borra su contenido.')) return;
+    d.tabs = (d.tabs||[]).filter(t => t.id !== id);
+    (d.photos||[]).filter(p => p.tab === id).forEach(p => deletePhotoRemote(p.id));
+    d.photos = (d.photos||[]).filter(p => p.tab !== id);
+    if (viewTab === id) viewTab = null;
+    persist(); render();
+  }
+
   function renderTasks() {
-    const d = days[viewKey] || { items: [] };
+    const d = curRead();
     const list = $('taskList'); list.innerHTML = '';
     if ((d.items||[]).length === 0) {
       const h = document.createElement('div'); h.className='empty-hint';
@@ -467,15 +578,45 @@
   function renderPhotos() {
     const d = days[viewKey] || {};
     const wrap = $('photos'); wrap.innerHTML = '';
-    const ph = d.photos || [];
-    wrap.classList.toggle('hidden', ph.length === 0);
-    ph.forEach(p => {
+    const ph = (d.photos || []).filter(p => !p.tab); // la rejilla es solo de la hoja del día
+    wrap.classList.toggle('hidden', !!viewTab || ph.length === 0);
+    if (!viewTab) ph.forEach(p => {
       const cell = document.createElement('div'); cell.className='photo';
       const img = document.createElement('img'); img.src=p.img; img.alt='foto'; img.loading='lazy';
       img.onclick = () => { $('lightboxImg').src=p.img; $('lightbox').classList.add('show'); };
       const del = document.createElement('button'); del.className='photo-del'; del.textContent='×';
       del.setAttribute('aria-label','Eliminar foto'); del.onclick = () => removePhoto(p.id);
       cell.append(img, del); wrap.appendChild(cell);
+    });
+    renderFreePhotos();
+  }
+
+  // fotos sueltas dentro de una pestaña (posición libre en coordenadas lógicas)
+  function positionPhoto(el, p) {
+    el.style.left = (p.x/LW*100) + '%';
+    el.style.top = (p.y/LW*cssW) + 'px';
+    el.style.width = (p.w/LW*100) + '%';
+  }
+  function renderFreePhotos() {
+    const layer = $('freeLayer'); layer.innerHTML = ''; photoEls.clear();
+    if (!viewTab) return;
+    const d = days[viewKey] || {};
+    (d.photos||[]).filter(p => p.tab === viewTab).forEach(p => {
+      if (p.x == null) { p.x = 60; p.y = 60; p.w = 420; p.h = p.h || 420; }
+      const el = document.createElement('div'); el.className = 'free-photo';
+      positionPhoto(el, p);
+      const img = document.createElement('img'); img.src = p.img; img.alt = 'foto'; img.loading = 'lazy';
+      img.onclick = () => { $('lightboxImg').src = p.img; $('lightbox').classList.add('show'); };
+      const del = document.createElement('button'); del.className = 'photo-del'; del.textContent = '×';
+      del.setAttribute('aria-label','Eliminar foto'); del.onclick = () => removePhoto(p.id);
+      el.append(img, del); layer.appendChild(el); photoEls.set(p.id, el);
+    });
+  }
+  function repositionPhotos() {
+    photoEls.forEach((el, id) => {
+      const d = days[viewKey] || {};
+      const p = (d.photos||[]).find(p => p.id === id);
+      if (p) positionPhoto(el, p);
     });
   }
 
@@ -491,35 +632,58 @@
       let html=''; if (items.length) html += (done===items.length ? '<span class="ok">'+done+'/'+items.length+'</span>' : done+'/'+items.length);
       if ((d.strokes||[]).length) html += (html?' · ':'')+'✎';
       if ((d.photos||[]).length) html += (html?' · ':'')+'📷';
+      if ((d.tabs||[]).length) html += (html?' · ':'')+'💭'+d.tabs.length;
       meta.innerHTML = html;
-      btn.append(name, meta); btn.onclick = () => { viewKey=k; render(); }; list.appendChild(btn);
+      btn.append(name, meta); btn.onclick = () => { viewKey=k; viewTab=null; render(); }; list.appendChild(btn);
     });
   }
 
   // ================= tareas =================
-  function addItem(text) { if (!text.trim()) return; day().items.push({ id:uid(), text:text.trim(), done:false }); persist(); render(); }
+  function addItem(text) { if (!text.trim()) return; const c = cur(); if (!c.items) c.items = []; c.items.push({ id:uid(), text:text.trim(), done:false }); persist(); render(); }
   function removeItem(id) {
-    const d = days[viewKey]; if (!d) return;
-    d.items = d.items.filter(i => i.id!==id);
-    if (!dayHasContent(viewKey) && viewKey!==todayKey()) { delete days[viewKey]; local.save(days); pushDay(viewKey); viewKey=todayKey(); }
+    if (!days[viewKey]) return;
+    const c = curRead(); if (!c.items) return;
+    c.items = c.items.filter(i => i.id!==id);
+    if (!dayHasContent(viewKey) && viewKey!==todayKey()) { delete days[viewKey]; local.save(days); pushDay(viewKey); viewKey=todayKey(); viewTab=null; }
     else persist();
     render();
   }
 
   // ================= fotos =================
+  // compresión: baja dimensiones y busca la calidad más alta que quepa en ~150 KB
+  function compressImage(img) {
+    const TARGET = 150 * 1024;
+    let best = null;
+    for (const max of [1000, 800, 640]) {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const w = Math.round(img.width*k), h = Math.round(img.height*k);
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      for (const q of [0.7, 0.58, 0.46, 0.36]) {
+        const data = c.toDataURL('image/jpeg', q);
+        best = data;
+        if (data.length * 0.75 <= TARGET) return data;
+      }
+    }
+    return best;
+  }
   function addPhotoFile(file) {
     if (!file) return;
     const rd = new FileReader();
     rd.onload = () => {
       const img = new Image();
       img.onload = () => {
-        const MAX = 1000; let w = img.width, h = img.height;
-        if (w >= h && w > MAX) { h = Math.round(h*MAX/w); w = MAX; }
-        else if (h > w && h > MAX) { w = Math.round(w*MAX/h); h = MAX; }
-        const c = document.createElement('canvas'); c.width=w; c.height=h;
-        c.getContext('2d').drawImage(img, 0, 0, w, h);
-        const data = c.toDataURL('image/jpeg', 0.65);
-        const photo = { id: uid(), img: data, u: Date.now() };
+        const c = cur(); // normaliza viewTab si la pestaña ya no existe
+        const photo = { id: uid(), img: compressImage(img), u: Date.now() };
+        if (viewTab) {
+          const d = days[viewKey];
+          const n = ((d && d.photos)||[]).filter(p => p.tab === viewTab).length;
+          photo.tab = viewTab;
+          photo.w = 420;
+          photo.h = Math.round(420 * img.height / img.width);
+          photo.x = 40 + (n%3)*60;
+          photo.y = Math.max(0, Math.round(scrollArea.scrollTop / cssW * LW)) + 240 + (n%3)*60;
+        }
         if (!day().photos) day().photos = [];
         day().photos.push(photo);
         local.save(days); pushPhoto(viewKey, photo); render();
@@ -532,7 +696,7 @@
   function removePhoto(id) {
     const d = days[viewKey]; if (!d || !d.photos) return;
     d.photos = d.photos.filter(p => p.id !== id);
-    if (!dayHasContent(viewKey) && viewKey!==todayKey()) { delete days[viewKey]; viewKey = todayKey(); }
+    if (!dayHasContent(viewKey) && viewKey!==todayKey()) { delete days[viewKey]; viewKey = todayKey(); viewTab = null; }
     local.save(days); deletePhotoRemote(id); render();
   }
 
@@ -546,9 +710,12 @@
   let drawing = false, current = null;
   let penColor = '#1C1C1A', penSize = 6, eraser = false;
   let cssW = 1, cssH = 1;
+  let tool = 'pen';            // 'pen' | 'move' (mover trazos y fotos dentro de una pestaña)
+  let moveTarget = null, lastPt = null;
+  const photoEls = new Map();  // id de foto -> elemento en la capa libre
 
   function resizeInk() {
-    if (drawing) return;
+    if (drawing || moveTarget) return;
     const w = sheet.clientWidth, h = sheet.clientHeight;
     if (w === 0) return;
     cssW = w; cssH = h;
@@ -556,6 +723,7 @@
     canvas.width = Math.round(w*dpr); canvas.height = Math.round(h*dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     redraw();
+    repositionPhotos();
   }
   function L2Px(pt) { return [ pt[0]/LW*cssW, pt[1]/LW*cssW ]; } // ambas coord escalan por ancho
   function toLogical(e) {
@@ -573,7 +741,7 @@
   }
   function redraw() {
     ctx.save(); ctx.setTransform(1,0,0,1,0,0); ctx.clearRect(0,0,canvas.width,canvas.height); ctx.restore();
-    ((days[viewKey]||{}).strokes||[]).forEach(drawStroke);
+    (curRead().strokes||[]).forEach(drawStroke);
     ctx.globalCompositeOperation = 'source-over';
   }
 
@@ -584,17 +752,54 @@
   function startStroke(e) {
     drawing = true;
     current = { c: penColor, s: eraser?penSize*3:penSize, e: eraser?1:0, p: [toLogical(e)] };
-    if (!day().strokes) day().strokes = [];
-    day().strokes.push(current); redraw();
+    const c = cur(); if (!c.strokes) c.strokes = [];
+    c.strokes.push(current); redraw();
   }
-  function cancelStroke() { if (current) { const s=day().strokes; if (s && s[s.length-1]===current) s.pop(); current=null; drawing=false; redraw(); } }
+  function cancelStroke() { if (current) { const s=cur().strokes; if (s && s[s.length-1]===current) s.pop(); current=null; drawing=false; redraw(); } }
   function endStroke() { if (!drawing) return; drawing=false; current=null; persistDebounced(); renderSidebar(); }
+
+  // mover: localizar el trazo o la foto bajo el punto (coordenadas lógicas)
+  function distToStroke(pt, s) {
+    let m = Infinity;
+    for (const p of s.p) { const d = Math.hypot(p[0]-pt[0], p[1]-pt[1]); if (d < m) m = d; }
+    return m;
+  }
+  function hitTest(pt) {
+    const strokes = curRead().strokes || [];
+    for (let i = strokes.length-1; i >= 0; i--) {
+      const s = strokes[i];
+      if (s.e) continue; // los trazos de goma no se mueven
+      if (distToStroke(pt, s) <= Math.max(24, s.s*1.5)) return { type:'stroke', s };
+    }
+    if (viewTab) {
+      const d = days[viewKey] || {};
+      const ph = (d.photos||[]).filter(p => p.tab === viewTab);
+      for (let i = ph.length-1; i >= 0; i--) {
+        const p = ph[i];
+        if (pt[0] >= p.x && pt[0] <= p.x + p.w && pt[1] >= p.y && pt[1] <= p.y + (p.h||p.w)) return { type:'photo', p };
+      }
+    }
+    return null;
+  }
+  function endMove() {
+    if (!moveTarget) return;
+    if (moveTarget.type === 'stroke') persistDebounced();
+    else { const p = moveTarget.p; p.u = Date.now(); local.save(days); pushPhoto(viewKey, p); }
+    moveTarget = null;
+  }
 
   canvas.addEventListener('pointerdown', e => {
     if (!drawMode) return;
     pointers.set(e.pointerId, { x:e.clientX, y:e.clientY });
-    if (pointers.size === 1) { gesture='draw'; startStroke(e); }
-    else if (pointers.size === 2) { if (gesture==='draw') cancelStroke(); gesture='pan'; panStartY=centroidY(); panStartScroll=scrollArea.scrollTop; }
+    if (pointers.size === 1) {
+      if (tool === 'move') { gesture='move'; lastPt = toLogical(e); moveTarget = hitTest(lastPt); }
+      else { gesture='draw'; startStroke(e); }
+    }
+    else if (pointers.size === 2) {
+      if (gesture==='draw') cancelStroke();
+      moveTarget = null;
+      gesture='pan'; panStartY=centroidY(); panStartScroll=scrollArea.scrollTop;
+    }
   });
   canvas.addEventListener('pointermove', e => {
     if (!pointers.has(e.pointerId)) return;
@@ -604,11 +809,17 @@
       const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       evs.forEach(ev => current.p.push(toLogical(ev))); redraw();
     }
+    else if (gesture==='move' && pointers.size===1 && moveTarget) {
+      const pt = toLogical(e); const dx = pt[0]-lastPt[0], dy = pt[1]-lastPt[1]; lastPt = pt;
+      if (moveTarget.type === 'stroke') { moveTarget.s.p.forEach(p => { p[0]+=dx; p[1]+=dy; }); redraw(); }
+      else { const p = moveTarget.p; p.x+=dx; p.y+=dy; const el = photoEls.get(p.id); if (el) positionPhoto(el, p); }
+    }
   });
   function liftPointer(e) {
     if (!pointers.has(e.pointerId)) return;
     pointers.delete(e.pointerId);
     if (gesture==='draw' && pointers.size===0) { endStroke(); gesture='idle'; }
+    else if (gesture==='move' && pointers.size===0) { endMove(); gesture='idle'; }
     else if (gesture==='pan' && pointers.size<2) { gesture='idle'; }
     if (pointers.size===0) gesture='idle';
   }
@@ -625,11 +836,13 @@
   }
   $('drawFab').onclick = () => setDrawMode(!drawMode);
 
-  document.querySelectorAll('.swatch').forEach(b => { b.onclick = () => { document.querySelectorAll('.swatch').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); penColor=b.dataset.color; eraser=false; $('eraserBtn').classList.remove('sel'); }; });
-  document.querySelectorAll('[data-size]').forEach(b => { b.onclick = () => { document.querySelectorAll('[data-size]').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); penSize=Number(b.dataset.size); }; });
-  $('eraserBtn').onclick = () => { eraser=!eraser; $('eraserBtn').classList.toggle('sel', eraser); };
-  $('undoBtn').onclick = () => { (day().strokes||[]).pop(); redraw(); persistDebounced(); renderSidebar(); };
-  $('clearBtn').onclick = () => { if (!confirm('¿Limpiar el dibujo de este día?')) return; day().strokes=[]; redraw(); persist(); renderSidebar(); };
+  function setTool(t) { tool = t; $('moveBtn').classList.toggle('sel', t==='move'); }
+  $('moveBtn').onclick = () => setTool(tool==='move' ? 'pen' : 'move');
+  document.querySelectorAll('.swatch').forEach(b => { b.onclick = () => { document.querySelectorAll('.swatch').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); penColor=b.dataset.color; eraser=false; $('eraserBtn').classList.remove('sel'); setTool('pen'); }; });
+  document.querySelectorAll('[data-size]').forEach(b => { b.onclick = () => { document.querySelectorAll('[data-size]').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); penSize=Number(b.dataset.size); setTool('pen'); }; });
+  $('eraserBtn').onclick = () => { eraser=!eraser; $('eraserBtn').classList.toggle('sel', eraser); if (eraser) setTool('pen'); };
+  $('undoBtn').onclick = () => { (cur().strokes||[]).pop(); redraw(); persistDebounced(); renderSidebar(); };
+  $('clearBtn').onclick = () => { if (!confirm(viewTab ? '¿Limpiar el dibujo de esta pestaña?' : '¿Limpiar el dibujo de este día?')) return; cur().strokes=[]; redraw(); persist(); renderSidebar(); };
 
   // reajustar el lienzo cuando cambia la altura del contenido
   if (window.ResizeObserver) { new ResizeObserver(() => resizeInk()).observe(sheet); }
@@ -691,10 +904,19 @@
 
   // ================= eventos generales =================
   $('newTaskInput').addEventListener('keydown', e => { if (e.key==='Enter') { addItem(e.target.value); e.target.value=''; } });
-  $('backToday').onclick = () => { viewKey = todayKey(); render(); };
+  $('backToday').onclick = () => { viewKey = todayKey(); viewTab = null; render(); };
+  $('exitTab').onclick = () => { viewTab = null; setTool('pen'); render(); };
+  $('dateName').onclick = () => {
+    if (!viewTab) return;
+    const t = cur(); const name = prompt('Nombre del pensamiento', t.name||'');
+    if (name === null) return;
+    t.name = name.trim() || t.name; persist(); render();
+  };
+  function closeSidebar() { $('sidebar').classList.remove('open'); $('toggleBtn').textContent='días ◂'; $('toggleBtn').setAttribute('aria-expanded','false'); resizeInk(); }
+  $('sidebarClose').onclick = closeSidebar;
   $('toggleBtn').onclick = () => { const open = $('sidebar').classList.toggle('open'); $('toggleBtn').textContent = open?'días ▸':'días ◂'; $('toggleBtn').setAttribute('aria-expanded', open); if (!open) resizeInk(); };
   window.addEventListener('resize', resizeInk);
-  setInterval(() => { if (viewKey!==todayKey() && !days[viewKey]) { viewKey=todayKey(); render(); } }, 60000);
+  setInterval(() => { if (viewKey!==todayKey() && !days[viewKey]) { viewKey=todayKey(); viewTab=null; render(); } }, 60000);
 
   // ================= init =================
   days = local.load(); if (typeof days!=='object'||days===null) days = {};

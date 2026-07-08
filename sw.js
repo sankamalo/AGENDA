@@ -1,4 +1,4 @@
-const CACHE = 'agenda-v3';
+const CACHE = 'agenda-v4';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
