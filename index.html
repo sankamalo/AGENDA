@@ -42,7 +42,8 @@
   .page { max-width: 640px; margin: 0 auto; }
 
   /* la hoja: contenido en flujo + lienzo superpuesto.
-     min-height para poder dibujar en toda la pantalla aunque haya poco texto */
+     min-height para poder dibujar en toda la pantalla aunque haya poco texto.
+     Dentro de un pensamiento la altura la fija el JS (lienzo grande y crece solo). */
   .sheet { position: relative; min-height: calc(100vh - 210px); min-height: calc(100dvh - 210px); }
   .content { position: relative; z-index: 1; }
   .ink { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 5; display: block; }
@@ -53,6 +54,7 @@
   .date-line { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; padding-right: 76px; }
   .date-name { font-size: 27px; font-weight: 600; letter-spacing: -0.02em; }
   .date-name::first-letter { text-transform: uppercase; }
+  .tab-date { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
   .readonly-tag {
     font-family: var(--mono); font-size: 11px; color: var(--ink-soft);
     border: 1px solid var(--ink-faint); border-radius: 4px;
@@ -80,20 +82,21 @@
   .tab-new { border-style: dashed; color: var(--ink-soft); font-size: 15px; }
   .tab-new:hover { color: var(--verde); }
 
-  /* fotos libres (dentro de una pestaña de pensamiento) */
+  /* fotos libres (dentro de una pestaña de pensamiento).
+     Se pintan como fondo (no <img>) para que iOS no las secuestre al pulsar largo. */
   .free-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
   .free-photo {
     position: absolute; pointer-events: auto; border-radius: 10px; overflow: hidden;
-    background: var(--panel); box-shadow: 0 2px 12px rgba(0,0,0,.14);
-    touch-action: none;
+    background: var(--panel) center/cover no-repeat; box-shadow: 0 2px 12px rgba(0,0,0,.14);
+    touch-action: none; cursor: grab;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; -webkit-user-drag: none;
   }
-  .free-photo img { width: 100%; display: block; cursor: grab; user-select: none; -webkit-user-drag: none; }
-  .free-photo.grabbing { box-shadow: 0 8px 26px rgba(0,0,0,.28); z-index: 3; }
-  .free-photo.grabbing img { cursor: grabbing; }
+  .free-photo.grabbing { box-shadow: 0 8px 26px rgba(0,0,0,.28); z-index: 3; cursor: grabbing; }
   .free-photo .ph-resize {
-    position: absolute; right: 0; bottom: 0; width: 30px; height: 30px; cursor: nwse-resize;
-    background: radial-gradient(circle at 70% 70%, rgba(31,122,77,.9) 0 7px, transparent 7px);
-    touch-action: none;
+    position: absolute; right: 0; bottom: 0; width: 34px; height: 34px; cursor: nwse-resize;
+    background: radial-gradient(circle at 72% 72%, rgba(31,122,77,.95) 0 8px, transparent 8px);
+    touch-action: none; -webkit-touch-callout: none;
   }
 
   /* tareas / notas */
@@ -228,8 +231,8 @@
         <div class="content" id="content">
           <div class="date-line">
             <h1 class="date-name" id="dateName"></h1>
-            <button class="readonly-tag hidden" id="backToday">← volver a hoy</button>
-            <button class="readonly-tag hidden" id="exitTab">← volver al día</button>
+            <span class="tab-date hidden" id="tabDate"></span>
+            <button class="readonly-tag hidden" id="exitTab">← pensamientos</button>
           </div>
           <div class="rule"></div>
           <div class="tabs-row hidden" id="tabsRow"></div>
@@ -274,13 +277,11 @@
 
   <div class="lightbox" id="lightbox"><img id="lightboxImg" alt=""></div>
 
-  <button class="toggle" id="toggleBtn" aria-expanded="false">días ◂</button>
+  <button class="toggle" id="toggleBtn" aria-expanded="false">menú</button>
 
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-inner">
       <button class="tool-btn sidebar-close" id="sidebarClose">✕ salir</button>
-      <div class="sidebar-title">Días anteriores</div>
-      <div id="dayList"></div>
 
       <details class="sidebar-block" id="syncBlock">
         <summary><span class="sync-dot" id="syncDot"></span> Sincronización</summary>
@@ -326,20 +327,43 @@
   };
 
   // ================= estado =================
-  // days[k] = { items:[{id,text,done}], strokes:[{c,s,e,p:[[x,y]..]}],
-  //             photos:[{id,img,u,tab?,x?,y?,w?,h?}],   // x/y/w/h lógicas si la foto va suelta en una pestaña
-  //             tabs:[{id,name,items,strokes}], u }
+  // Todo vive en una única hoja persistente HOME. Los pensamientos ya NO se
+  // segmentan por día: la fecha de arriba es solo cosmética (hoy).
+  // days[HOME] = { items, strokes, photos:[{id,img,u,tab?,x?,y?,w?,h?}],
+  //               tabs:[{id,name,items,strokes,size?,created?}], u }
+  const HOME = 'home';
   let days = {};
-  let viewKey = todayKey();
-  let viewTab = null; // id de la pestaña de pensamiento abierta (null = hoja del día)
+  let viewKey = HOME;
+  let viewTab = null; // id de la pestaña de pensamiento abierta (null = hoja principal)
 
   function todayKey() { const d = new Date(); const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
   function keyToDate(k) { const [y,m,d] = k.split('-').map(Number); return new Date(y, m-1, d); }
   function fmtName(k)  { return keyToDate(k).toLocaleDateString('es-ES', { weekday:'long', day:'numeric', month:'long' }); }
-  function fmtShort(k) { return keyToDate(k).toLocaleDateString('es-ES', { weekday:'short', day:'numeric', month:'short' }); }
+  function fmtShort(k) { return keyToDate(k).toLocaleDateString('es-ES', { weekday:'short', day:'numeric', month:'short', year:'numeric' }); }
+  function isDateKey(k) { return /^\d{4}-\d{2}-\d{2}$/.test(k); }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
-  function day() { if (!days[viewKey]) days[viewKey] = { items:[], strokes:[], photos:[], tabs:[], u:0 }; return days[viewKey]; }
+  function day() { if (!days[HOME]) days[HOME] = { items:[], strokes:[], photos:[], tabs:[], u:0 }; return days[HOME]; }
   function dayHasContent(k) { const d = days[k]; if (!d) return false; return (d.items&&d.items.length) || (d.strokes&&d.strokes.length) || (d.photos&&d.photos.length) || (d.tabs&&d.tabs.length); }
+
+  // migración/consolidación: dobla los pensamientos y sus fotos de cualquier
+  // clave antigua (por fecha) dentro de HOME. Idempotente (dedupe por id).
+  function foldIntoHome() {
+    const home = day(); if (!home.tabs) home.tabs = []; if (!home.photos) home.photos = [];
+    let moved = false;
+    Object.keys(days).forEach(k => {
+      if (k === HOME) return; const d = days[k]; if (!d) return;
+      (d.tabs||[]).forEach(t => {
+        if (!home.tabs.some(x => x.id === t.id)) {
+          if (!t.created) t.created = isDateKey(k) ? k : todayKey();
+          home.tabs.push(t); moved = true;
+        }
+      });
+      (d.photos||[]).forEach(p => {
+        if (p.tab && !home.photos.some(x => x.id === p.id)) { home.photos.push(p); moved = true; }
+      });
+    });
+    return moved;
+  }
   // contenedor activo: la pestaña de pensamiento abierta o la hoja del día
   function cur() { const d = day(); if (viewTab) { const t = (d.tabs||[]).find(t => t.id === viewTab); if (t) return t; viewTab = null; } return d; }
   function curRead() { const d = days[viewKey]; if (!d) return { items:[], strokes:[] }; if (viewTab) { const t = (d.tabs||[]).find(t => t.id === viewTab); if (t) return t; } return d; }
@@ -532,19 +556,20 @@
 
   // ================= render =================
   function render() {
-    const isToday = viewKey === todayKey();
-    const d = days[viewKey];
+    foldIntoHome();
+    const d = days[HOME];
     let tab = null;
     if (viewTab) { tab = ((d && d.tabs) || []).find(t => t.id === viewTab) || null; if (!tab) viewTab = null; }
     const inTab = !!tab;
-    $('dateName').textContent = tab ? (tab.name || 'pensamiento') : fmtName(viewKey);
+    $('dateName').textContent = tab ? (tab.name || 'pensamiento') : fmtName(todayKey());
     $('dateName').style.cursor = tab ? 'pointer' : '';
     $('dateName').title = tab ? 'Tocar para renombrar' : '';
-    $('backToday').classList.toggle('hidden', isToday || inTab);
+    $('tabDate').classList.toggle('hidden', !inTab);
+    if (inTab) $('tabDate').textContent = tab.created ? ('creado ' + fmtShort(tab.created)) : '';
     $('exitTab').classList.toggle('hidden', !inTab);
     $('moveBtn').classList.toggle('hidden', !inTab);
 
-    // escribir / dibujar / fotos SOLO dentro de un pensamiento; la hoja del día es solo el índice
+    // escribir / dibujar / fotos SOLO dentro de un pensamiento; la hoja principal es solo el índice
     $('newTaskRow').classList.toggle('hidden', !inTab);
     $('taskList').classList.toggle('hidden', !inTab);
     $('dock').classList.toggle('hidden', !inTab);
@@ -554,8 +579,21 @@
     renderTabs();
     renderTasks();
     renderPhotos();
+    updateSheetHeight();
     resizeInk();
-    renderSidebar();
+  }
+
+  // dentro de un pensamiento la hoja es un lienzo grande que crece según el
+  // contenido, para poder dibujar y mover imágenes muy por debajo del texto
+  function updateSheetHeight() {
+    if (!viewTab) { sheet.style.minHeight = ''; return; }
+    const w = sheet.clientWidth || cssW || 1;
+    let maxY = 0;
+    (curRead().strokes||[]).forEach(s => s.p.forEach(pt => { if (pt[1] > maxY) maxY = pt[1]; }));
+    (day().photos||[]).filter(p => p.tab === viewTab).forEach(p => { const b = (p.y||0)+(p.h||p.w||0); if (b > maxY) maxY = b; });
+    const contentPx = maxY / LW * w;
+    const floor = Math.max(window.innerHeight * 1.5, 1100);
+    sheet.style.minHeight = Math.round(Math.max(floor, contentPx + 500)) + 'px';
   }
 
   // ================= pestañas de pensamiento =================
@@ -564,7 +602,7 @@
     row.innerHTML = '';
     row.classList.toggle('hidden', !!viewTab);
     if (viewTab) return;
-    const d = days[viewKey] || {};
+    const d = days[HOME] || {};
     (d.tabs||[]).forEach(t => {
       const chip = document.createElement('button'); chip.className = 'tab-chip';
       chip.style.fontSize = (15 * (t.size || 1)) + 'px';
@@ -614,7 +652,7 @@
     const end = e => {
       if (e.pointerId !== downId) return;
       clearTimeout(timer); downId = null;
-      if (resizing) { resizing = false; chip.classList.remove('resizing'); sfx('drop'); persist(); renderSidebar(); }
+      if (resizing) { resizing = false; chip.classList.remove('resizing'); sfx('drop'); persist(); }
       else if (!moved) { sfx('open'); viewTab = t.id; render(); }
     };
     chip.addEventListener('pointerup', end);
@@ -624,14 +662,14 @@
   function createTab() {
     const name = prompt('Nombre del pensamiento', '');
     if (name === null) return;
-    const t = { id: uid(), name: name.trim() || 'pensamiento', items: [], strokes: [], size: 1 };
+    const t = { id: uid(), name: name.trim() || 'pensamiento', items: [], strokes: [], size: 1, created: todayKey() };
     const d = day(); if (!d.tabs) d.tabs = [];
     d.tabs.push(t);
     viewTab = t.id;
     sfx('create'); persist(); render();
   }
   function deleteTab(id) {
-    const d = days[viewKey]; if (!d) return;
+    const d = days[HOME]; if (!d) return;
     const t = (d.tabs||[]).find(t => t.id === id);
     if (!confirm('¿Eliminar el pensamiento' + (t && t.name ? ' «'+t.name+'»' : '') + '? Se borra su contenido.')) return;
     d.tabs = (d.tabs||[]).filter(t => t.id !== id);
@@ -646,7 +684,7 @@
     const list = $('taskList'); list.innerHTML = '';
     if ((d.items||[]).length === 0) {
       const h = document.createElement('div'); h.className='empty-hint';
-      h.textContent = viewKey===todayKey() ? 'Página en blanco. Escribe, dicta o dibuja.' : 'Este día quedó sin notas.';
+      h.textContent = 'Página en blanco. Escribe, dicta o dibuja.';
       list.appendChild(h);
     }
     (d.items||[]).forEach(item => {
@@ -668,18 +706,9 @@
   function autoGrow(el) { el.style.height='auto'; el.style.height = el.scrollHeight+'px'; }
 
   function renderPhotos() {
-    const d = days[viewKey] || {};
-    const wrap = $('photos'); wrap.innerHTML = '';
-    const ph = (d.photos || []).filter(p => !p.tab); // la rejilla es solo de la hoja del día
-    wrap.classList.toggle('hidden', !!viewTab || ph.length === 0);
-    if (!viewTab) ph.forEach(p => {
-      const cell = document.createElement('div'); cell.className='photo';
-      const img = document.createElement('img'); img.src=p.img; img.alt='foto'; img.loading='lazy';
-      img.onclick = () => { $('lightboxImg').src=p.img; $('lightbox').classList.add('show'); };
-      const del = document.createElement('button'); del.className='photo-del'; del.textContent='×';
-      del.setAttribute('aria-label','Eliminar foto'); del.onclick = () => removePhoto(p.id);
-      cell.append(img, del); wrap.appendChild(cell);
-    });
+    // toda foto real vive dentro de un pensamiento (posición libre); la rejilla
+    // clásica ya no se usa. Se mantiene oculta (datos heredados sin tab).
+    $('photos').classList.add('hidden');
     renderFreePhotos();
   }
 
@@ -688,38 +717,41 @@
     el.style.left = (p.x/LW*100) + '%';
     el.style.top = (p.y/LW*cssW) + 'px';
     el.style.width = (p.w/LW*100) + '%';
+    el.style.aspectRatio = (p.w||1) + ' / ' + (p.h||p.w||1);
   }
-  function savePhotoPos(p) { p.u = Date.now(); local.save(days); pushPhoto(viewKey, p); renderSidebar(); }
+  function savePhotoPos(p) { p.u = Date.now(); local.save(days); pushPhoto(HOME, p); movingFree=false; updateSheetHeight(); resizeInk(); }
   function renderFreePhotos() {
     const layer = $('freeLayer'); layer.innerHTML = ''; photoEls.clear();
     if (!viewTab) return;
-    const d = days[viewKey] || {};
+    const d = days[HOME] || {};
     (d.photos||[]).filter(p => p.tab === viewTab).forEach(p => {
       if (p.x == null) { p.x = 60; p.y = 60; p.w = 420; p.h = p.h || 420; }
       const el = document.createElement('div'); el.className = 'free-photo';
+      el.style.backgroundImage = 'url("' + p.img + '")';
       positionPhoto(el, p);
-      const img = document.createElement('img'); img.src = p.img; img.alt = 'foto'; img.loading = 'lazy';
+      el.addEventListener('contextmenu', ev => ev.preventDefault()); // sin menú "guardar imagen" en iOS
       const del = document.createElement('button'); del.className = 'photo-del'; del.textContent = '×';
       del.setAttribute('aria-label','Eliminar foto');
       del.onpointerdown = ev => ev.stopPropagation();
       del.onclick = ev => { ev.stopPropagation(); removePhoto(p.id); };
       const grip = document.createElement('div'); grip.className = 'ph-resize'; grip.title = 'Redimensionar';
-      el.append(img, del, grip); layer.appendChild(el); photoEls.set(p.id, el);
-      attachFreePhotoGestures(el, img, grip, p);
+      el.append(del, grip); layer.appendChild(el); photoEls.set(p.id, el);
+      attachFreePhotoGestures(el, grip, p);
     });
   }
 
   // dentro del pensamiento: pulsación larga sobre la imagen para moverla; asa para redimensionar
-  function attachFreePhotoGestures(el, img, grip, p) {
+  function attachFreePhotoGestures(el, grip, p) {
     const aspect = () => (p.h && p.w) ? p.h / p.w : 1;
-    // --- mover (pulsación larga) ---
+    // --- mover (pulsación larga sobre la propia foto) ---
     let timer=null, armed=false, moved=false, sx=0, sy=0, ox=0, oy=0, downId=null;
-    img.addEventListener('pointerdown', e => {
+    el.addEventListener('pointerdown', e => {
+      if (e.target === grip) return;
       downId = e.pointerId; armed=false; moved=false; sx=e.clientX; sy=e.clientY; ox=p.x; oy=p.y;
-      img.setPointerCapture(e.pointerId);
-      timer = setTimeout(() => { armed=true; el.classList.add('grabbing'); sfx('pickup'); if (navigator.vibrate) navigator.vibrate(12); }, 300);
+      el.setPointerCapture(e.pointerId);
+      timer = setTimeout(() => { armed=true; movingFree=true; el.classList.add('grabbing'); sfx('pickup'); if (navigator.vibrate) navigator.vibrate(12); }, 300);
     });
-    img.addEventListener('pointermove', e => {
+    el.addEventListener('pointermove', e => {
       if (e.pointerId !== downId) return;
       const dx=e.clientX-sx, dy=e.clientY-sy;
       if (!armed) { if (Math.hypot(dx,dy) > 10) { moved=true; clearTimeout(timer); } return; }
@@ -727,6 +759,7 @@
       p.x = Math.max(0, ox + dx/cssW*LW);
       p.y = Math.max(0, oy + dy/cssW*LW);
       positionPhoto(el, p);
+      updateSheetHeight(); // crece la hoja si arrastras hacia abajo
     });
     const endMoveP = e => {
       if (e.pointerId !== downId) return;
@@ -734,13 +767,13 @@
       if (armed) { armed=false; el.classList.remove('grabbing'); sfx('drop'); savePhotoPos(p); }
       else if (!moved) { $('lightboxImg').src = p.img; $('lightbox').classList.add('show'); }
     };
-    img.addEventListener('pointerup', endMoveP);
-    img.addEventListener('pointercancel', e => { clearTimeout(timer); if (armed){armed=false; el.classList.remove('grabbing');} downId=null; });
+    el.addEventListener('pointerup', endMoveP);
+    el.addEventListener('pointercancel', e => { clearTimeout(timer); if (armed){armed=false; movingFree=false; el.classList.remove('grabbing');} downId=null; });
     // --- redimensionar (asa) ---
     let rId=null, rsx=0, rsW=0;
     grip.addEventListener('pointerdown', e => {
       e.stopPropagation(); rId=e.pointerId; rsx=e.clientX; rsW=p.w;
-      grip.setPointerCapture(e.pointerId); el.classList.add('grabbing'); sfx('pickup');
+      grip.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing'); sfx('pickup');
     });
     grip.addEventListener('pointermove', e => {
       if (e.pointerId !== rId) return; e.preventDefault();
@@ -749,42 +782,21 @@
       positionPhoto(el, p);
     });
     grip.addEventListener('pointerup', e => { if (e.pointerId!==rId) return; rId=null; el.classList.remove('grabbing'); sfx('drop'); savePhotoPos(p); });
-    grip.addEventListener('pointercancel', e => { rId=null; el.classList.remove('grabbing'); });
+    grip.addEventListener('pointercancel', e => { rId=null; movingFree=false; el.classList.remove('grabbing'); });
   }
   function repositionPhotos() {
     photoEls.forEach((el, id) => {
-      const d = days[viewKey] || {};
-      const p = (d.photos||[]).find(p => p.id === id);
+      const p = (days[HOME].photos||[]).find(p => p.id === id);
       if (p) positionPhoto(el, p);
-    });
-  }
-
-  function renderSidebar() {
-    const keys = Object.keys(days).filter(k => k!==todayKey() && dayHasContent(k)).sort().reverse();
-    const list = $('dayList'); list.innerHTML = '';
-    if (keys.length === 0) { const e=document.createElement('div'); e.className='sidebar-empty'; e.textContent='Aún no hay días anteriores.'; list.appendChild(e); }
-    keys.forEach(k => {
-      const d = days[k]; const items = d.items||[]; const done = items.filter(i=>i.done).length;
-      const btn = document.createElement('button'); btn.className='day-item'+(k===viewKey?' active':'');
-      const name = document.createElement('span'); name.className='d-name'; name.textContent = fmtShort(k);
-      const meta = document.createElement('span'); meta.className='d-meta';
-      let html=''; if (items.length) html += (done===items.length ? '<span class="ok">'+done+'/'+items.length+'</span>' : done+'/'+items.length);
-      if ((d.strokes||[]).length) html += (html?' · ':'')+'✎';
-      if ((d.photos||[]).length) html += (html?' · ':'')+'📷';
-      if ((d.tabs||[]).length) html += (html?' · ':'')+'💭'+d.tabs.length;
-      meta.innerHTML = html;
-      btn.append(name, meta); btn.onclick = () => { viewKey=k; viewTab=null; render(); }; list.appendChild(btn);
     });
   }
 
   // ================= tareas =================
   function addItem(text) { if (!text.trim()) return; const c = cur(); if (!c.items) c.items = []; c.items.push({ id:uid(), text:text.trim(), done:false }); persist(); render(); }
   function removeItem(id) {
-    if (!days[viewKey]) return;
     const c = curRead(); if (!c.items) return;
     c.items = c.items.filter(i => i.id!==id);
-    if (!dayHasContent(viewKey) && viewKey!==todayKey()) { delete days[viewKey]; local.save(days); pushDay(viewKey); viewKey=todayKey(); viewTab=null; }
-    else persist();
+    persist();
     render();
   }
 
@@ -815,7 +827,7 @@
         const c = cur(); // normaliza viewTab si la pestaña ya no existe
         const photo = { id: uid(), img: compressImage(img), u: Date.now() };
         if (viewTab) {
-          const d = days[viewKey];
+          const d = days[HOME];
           const n = ((d && d.photos)||[]).filter(p => p.tab === viewTab).length;
           photo.tab = viewTab;
           photo.w = 420;
@@ -825,7 +837,7 @@
         }
         if (!day().photos) day().photos = [];
         day().photos.push(photo);
-        local.save(days); pushPhoto(viewKey, photo); sfx('photo'); render();
+        local.save(days); pushPhoto(HOME, photo); sfx('photo'); render();
       };
       img.onerror = () => alert('No se pudo leer la imagen.');
       img.src = rd.result;
@@ -833,9 +845,8 @@
     rd.readAsDataURL(file);
   }
   function removePhoto(id) {
-    const d = days[viewKey]; if (!d || !d.photos) return;
+    const d = days[HOME]; if (!d || !d.photos) return;
     d.photos = d.photos.filter(p => p.id !== id);
-    if (!dayHasContent(viewKey) && viewKey!==todayKey()) { delete days[viewKey]; viewKey = todayKey(); viewTab = null; }
     local.save(days); deletePhotoRemote(id); render();
   }
 
@@ -851,10 +862,11 @@
   let cssW = 1, cssH = 1;
   let tool = 'pen';            // 'pen' | 'move' (mover trazos y fotos dentro de una pestaña)
   let moveTarget = null, lastPt = null;
+  let movingFree = false;      // arrastrando/redimensionando una foto libre
   const photoEls = new Map();  // id de foto -> elemento en la capa libre
 
   function resizeInk() {
-    if (drawing || moveTarget) return;
+    if (drawing || moveTarget || movingFree) return;
     const w = sheet.clientWidth, h = sheet.clientHeight;
     if (w === 0) return;
     cssW = w; cssH = h;
@@ -895,7 +907,7 @@
     c.strokes.push(current); redraw();
   }
   function cancelStroke() { if (current) { const s=cur().strokes; if (s && s[s.length-1]===current) s.pop(); current=null; drawing=false; redraw(); } }
-  function endStroke() { if (!drawing) return; drawing=false; current=null; persistDebounced(); renderSidebar(); }
+  function endStroke() { if (!drawing) return; drawing=false; current=null; persistDebounced(); updateSheetHeight(); }
 
   // mover: localizar el trazo o la foto bajo el punto (coordenadas lógicas)
   function distToStroke(pt, s) {
@@ -980,8 +992,8 @@
   document.querySelectorAll('.swatch').forEach(b => { b.onclick = () => { document.querySelectorAll('.swatch').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); penColor=b.dataset.color; eraser=false; $('eraserBtn').classList.remove('sel'); setTool('pen'); }; });
   document.querySelectorAll('[data-size]').forEach(b => { b.onclick = () => { document.querySelectorAll('[data-size]').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); penSize=Number(b.dataset.size); setTool('pen'); }; });
   $('eraserBtn').onclick = () => { eraser=!eraser; $('eraserBtn').classList.toggle('sel', eraser); if (eraser) setTool('pen'); };
-  $('undoBtn').onclick = () => { (cur().strokes||[]).pop(); redraw(); persistDebounced(); renderSidebar(); };
-  $('clearBtn').onclick = () => { if (!confirm(viewTab ? '¿Limpiar el dibujo de esta pestaña?' : '¿Limpiar el dibujo de este día?')) return; cur().strokes=[]; redraw(); persist(); renderSidebar(); };
+  $('undoBtn').onclick = () => { (cur().strokes||[]).pop(); redraw(); persistDebounced(); };
+  $('clearBtn').onclick = () => { if (!confirm('¿Limpiar el dibujo de este pensamiento?')) return; cur().strokes=[]; redraw(); persist(); };
 
   // reajustar el lienzo cuando cambia la altura del contenido
   if (window.ResizeObserver) { new ResizeObserver(() => resizeInk()).observe(sheet); }
@@ -1048,22 +1060,28 @@
 
   // ================= eventos generales =================
   $('newTaskInput').addEventListener('keydown', e => { if (e.key==='Enter') { addItem(e.target.value); e.target.value=''; } });
-  $('backToday').onclick = () => { viewKey = todayKey(); viewTab = null; render(); };
-  $('exitTab').onclick = () => { viewTab = null; setTool('pen'); render(); };
+  $('exitTab').onclick = () => { viewTab = null; setTool('pen'); sfx('drop'); render(); };
   $('dateName').onclick = () => {
     if (!viewTab) return;
     const t = cur(); const name = prompt('Nombre del pensamiento', t.name||'');
     if (name === null) return;
     t.name = name.trim() || t.name; persist(); render();
   };
-  function closeSidebar() { $('sidebar').classList.remove('open'); $('toggleBtn').textContent='días ◂'; $('toggleBtn').setAttribute('aria-expanded','false'); resizeInk(); }
+  function closeSidebar() { $('sidebar').classList.remove('open'); $('toggleBtn').setAttribute('aria-expanded','false'); resizeInk(); }
   $('sidebarClose').onclick = closeSidebar;
-  $('toggleBtn').onclick = () => { const open = $('sidebar').classList.toggle('open'); $('toggleBtn').textContent = open?'días ▸':'días ◂'; $('toggleBtn').setAttribute('aria-expanded', open); if (!open) resizeInk(); };
-  window.addEventListener('resize', resizeInk);
-  setInterval(() => { if (viewKey!==todayKey() && !days[viewKey]) { viewKey=todayKey(); viewTab=null; render(); } }, 60000);
+  $('toggleBtn').onclick = () => { const open = $('sidebar').classList.toggle('open'); $('toggleBtn').setAttribute('aria-expanded', open); if (!open) resizeInk(); };
+  window.addEventListener('resize', () => { updateSheetHeight(); resizeInk(); });
+  // refresca la fecha de arriba (cambia sola a medianoche); no toca los pensamientos
+  setInterval(() => { if (!viewTab) $('dateName').textContent = fmtName(todayKey()); }, 60000);
 
   // ================= init =================
   days = local.load(); if (typeof days!=='object'||days===null) days = {};
+  // migra datos antiguos (por fecha) a la hoja única y los sincroniza una vez
+  if (foldIntoHome() && !local.getPref('agenda-home-migrated')) {
+    local.setPref('agenda-home-migrated', '1');
+    local.save(days); pushDay(HOME);
+    (days[HOME].photos||[]).forEach(p => pushPhoto(HOME, p));
+  }
   $('fbConfig').value = local.getPref('agenda-fb-config')||'';
   $('syncKey').value = local.getPref('agenda-sync-key')||'';
   $('storageNote').textContent = localMode;
