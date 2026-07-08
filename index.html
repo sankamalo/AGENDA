@@ -92,11 +92,19 @@
     -webkit-user-select: none; user-select: none;
     -webkit-touch-callout: none; -webkit-user-drag: none;
   }
-  .free-photo.grabbing { box-shadow: 0 8px 26px rgba(0,0,0,.28); z-index: 3; cursor: grabbing; }
+  .free-photo.grabbing { box-shadow: 0 8px 26px rgba(0,0,0,.28); z-index: 3; }
+  .free-photo .ph-handle {
+    position: absolute; width: 36px; height: 36px; touch-action: none; -webkit-touch-callout: none;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 15px; line-height: 1;
+  }
+  .free-photo .ph-move {
+    left: 6px; top: 6px; border-radius: 50%; cursor: move;
+    background: rgba(31,122,77,.92); box-shadow: 0 1px 4px rgba(0,0,0,.35);
+  }
   .free-photo .ph-resize {
-    position: absolute; right: 0; bottom: 0; width: 34px; height: 34px; cursor: nwse-resize;
-    background: radial-gradient(circle at 72% 72%, rgba(31,122,77,.95) 0 8px, transparent 8px);
-    touch-action: none; -webkit-touch-callout: none;
+    right: 0; bottom: 0; cursor: nwse-resize;
+    background: radial-gradient(circle at 74% 74%, rgba(31,122,77,.95) 0 9px, transparent 9px);
   }
 
   /* tareas / notas */
@@ -730,55 +738,53 @@
       el.style.backgroundImage = 'url("' + p.img + '")';
       positionPhoto(el, p);
       el.addEventListener('contextmenu', ev => ev.preventDefault()); // sin menú "guardar imagen" en iOS
+      const move = document.createElement('div'); move.className = 'ph-handle ph-move'; move.textContent = '✥'; move.title = 'Mover';
       const del = document.createElement('button'); del.className = 'photo-del'; del.textContent = '×';
       del.setAttribute('aria-label','Eliminar foto');
       del.onpointerdown = ev => ev.stopPropagation();
       del.onclick = ev => { ev.stopPropagation(); removePhoto(p.id); };
-      const grip = document.createElement('div'); grip.className = 'ph-resize'; grip.title = 'Redimensionar';
-      el.append(del, grip); layer.appendChild(el); photoEls.set(p.id, el);
-      attachFreePhotoGestures(el, grip, p);
+      const grip = document.createElement('div'); grip.className = 'ph-handle ph-resize'; grip.title = 'Redimensionar';
+      el.append(move, del, grip); layer.appendChild(el); photoEls.set(p.id, el);
+      attachFreePhotoGestures(el, move, grip, p);
     });
   }
 
-  // dentro del pensamiento: pulsación larga sobre la imagen para moverla; asa para redimensionar
-  function attachFreePhotoGestures(el, grip, p) {
-    const aspect = () => (p.h && p.w) ? p.h / p.w : 1;
-    // --- mover (pulsación larga sobre la propia foto) ---
-    let timer=null, armed=false, moved=false, sx=0, sy=0, ox=0, oy=0, downId=null;
-    el.addEventListener('pointerdown', e => {
-      if (e.target === grip) return;
-      downId = e.pointerId; armed=false; moved=false; sx=e.clientX; sy=e.clientY; ox=p.x; oy=p.y;
-      el.setPointerCapture(e.pointerId);
-      timer = setTimeout(() => { armed=true; movingFree=true; el.classList.add('grabbing'); sfx('pickup'); if (navigator.vibrate) navigator.vibrate(12); }, 300);
+  // dentro del pensamiento: asa ✥ (arriba-izq) mueve; asa (abajo-der) redimensiona;
+  // toque en la foto = verla grande. Con asas dedicadas iOS no secuestra el gesto.
+  function attachFreePhotoGestures(el, move, grip, p) {
+    // toque corto sobre la foto -> lightbox
+    el.addEventListener('click', e => {
+      if (e.target === move || e.target === grip || (e.target.classList && e.target.classList.contains('photo-del'))) return;
+      $('lightboxImg').src = p.img; $('lightbox').classList.add('show');
     });
-    el.addEventListener('pointermove', e => {
-      if (e.pointerId !== downId) return;
-      const dx=e.clientX-sx, dy=e.clientY-sy;
-      if (!armed) { if (Math.hypot(dx,dy) > 10) { moved=true; clearTimeout(timer); } return; }
-      e.preventDefault(); moved=true;
-      p.x = Math.max(0, ox + dx/cssW*LW);
-      p.y = Math.max(0, oy + dy/cssW*LW);
+    // --- mover (asa ✥) ---
+    let mId=null, msx=0, msy=0, ox=0, oy=0;
+    move.addEventListener('pointerdown', e => {
+      e.stopPropagation(); e.preventDefault();
+      mId=e.pointerId; msx=e.clientX; msy=e.clientY; ox=p.x; oy=p.y;
+      move.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing');
+      sfx('pickup'); if (navigator.vibrate) navigator.vibrate(10);
+    });
+    move.addEventListener('pointermove', e => {
+      if (e.pointerId !== mId) return; e.preventDefault();
+      p.x = Math.max(0, ox + (e.clientX-msx)/cssW*LW);
+      p.y = Math.max(0, oy + (e.clientY-msy)/cssW*LW);
       positionPhoto(el, p);
       updateSheetHeight(); // crece la hoja si arrastras hacia abajo
     });
-    const endMoveP = e => {
-      if (e.pointerId !== downId) return;
-      clearTimeout(timer); downId=null;
-      if (armed) { armed=false; el.classList.remove('grabbing'); sfx('drop'); savePhotoPos(p); }
-      else if (!moved) { $('lightboxImg').src = p.img; $('lightbox').classList.add('show'); }
-    };
-    el.addEventListener('pointerup', endMoveP);
-    el.addEventListener('pointercancel', e => { clearTimeout(timer); if (armed){armed=false; movingFree=false; el.classList.remove('grabbing');} downId=null; });
-    // --- redimensionar (asa) ---
-    let rId=null, rsx=0, rsW=0;
+    move.addEventListener('pointerup', e => { if (e.pointerId!==mId) return; mId=null; el.classList.remove('grabbing'); sfx('drop'); savePhotoPos(p); });
+    move.addEventListener('pointercancel', e => { mId=null; movingFree=false; el.classList.remove('grabbing'); });
+    // --- redimensionar (asa) : el aspecto se fija al empezar, no se recalcula ---
+    let rId=null, rsx=0, rsW=0, aspect0=1;
     grip.addEventListener('pointerdown', e => {
-      e.stopPropagation(); rId=e.pointerId; rsx=e.clientX; rsW=p.w;
+      e.stopPropagation(); e.preventDefault();
+      rId=e.pointerId; rsx=e.clientX; rsW=p.w; aspect0 = (p.h && p.w) ? p.h/p.w : 1;
       grip.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing'); sfx('pickup');
     });
     grip.addEventListener('pointermove', e => {
       if (e.pointerId !== rId) return; e.preventDefault();
       p.w = Math.max(120, Math.min(LW, rsW + (e.clientX-rsx)/cssW*LW));
-      p.h = Math.round(p.w * aspect());
+      p.h = Math.round(p.w * aspect0);
       positionPhoto(el, p);
     });
     grip.addEventListener('pointerup', e => { if (e.pointerId!==rId) return; rId=null; el.classList.remove('grabbing'); sfx('drop'); savePhotoPos(p); });
