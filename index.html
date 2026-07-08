@@ -63,18 +63,21 @@
   .hidden { display: none !important; }
 
   /* pestañas de pensamiento */
-  .tabs-row { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 0 4px; }
+  .day-hint { color: var(--ink-soft); font-size: 15px; line-height: 1.5; padding: 4px 0 2px; max-width: 34em; }
+  .tabs-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 18px 0 4px; align-items: center; }
   .tab-chip {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 0.55em;
     border-radius: 999px; border: 1px solid var(--ink-faint); background: var(--paper);
-    padding: 8px 14px; font-size: 14px; font-family: inherit; color: var(--ink); cursor: pointer;
+    padding: 0.55em 1em; font-size: 15px; font-family: inherit; color: var(--ink); cursor: pointer;
+    touch-action: none; user-select: none; transition: box-shadow .12s, border-color .12s;
   }
   .tab-chip:hover { border-color: var(--verde); }
+  .tab-chip.resizing { border-color: var(--verde); box-shadow: 0 0 0 3px var(--verde-soft); }
   .tab-chip .t-name::first-letter { text-transform: uppercase; }
-  .tab-chip .t-meta { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); }
-  .tab-chip .t-del { color: var(--ink-soft); font-size: 15px; line-height: 1; padding: 0 2px; }
+  .tab-chip .t-meta { font-family: var(--mono); font-size: 0.68em; color: var(--ink-soft); }
+  .tab-chip .t-del { color: var(--ink-soft); font-size: 1em; line-height: 1; padding: 0 2px; }
   .tab-chip .t-del:hover { color: var(--ink); }
-  .tab-new { border-style: dashed; color: var(--ink-soft); }
+  .tab-new { border-style: dashed; color: var(--ink-soft); font-size: 15px; }
   .tab-new:hover { color: var(--verde); }
 
   /* fotos libres (dentro de una pestaña de pensamiento) */
@@ -82,8 +85,16 @@
   .free-photo {
     position: absolute; pointer-events: auto; border-radius: 10px; overflow: hidden;
     background: var(--panel); box-shadow: 0 2px 12px rgba(0,0,0,.14);
+    touch-action: none;
   }
-  .free-photo img { width: 100%; display: block; cursor: zoom-in; }
+  .free-photo img { width: 100%; display: block; cursor: grab; user-select: none; -webkit-user-drag: none; }
+  .free-photo.grabbing { box-shadow: 0 8px 26px rgba(0,0,0,.28); z-index: 3; }
+  .free-photo.grabbing img { cursor: grabbing; }
+  .free-photo .ph-resize {
+    position: absolute; right: 0; bottom: 0; width: 30px; height: 30px; cursor: nwse-resize;
+    background: radial-gradient(circle at 70% 70%, rgba(31,122,77,.9) 0 7px, transparent 7px);
+    touch-action: none;
+  }
 
   /* tareas / notas */
   .task { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; }
@@ -223,8 +234,10 @@
           <div class="rule"></div>
           <div class="tabs-row hidden" id="tabsRow"></div>
 
+          <div class="day-hint hidden" id="dayHint">Toca un pensamiento para entrar, o crea uno nuevo. Aquí dentro no se escribe ni se dibuja: todo va dentro de los pensamientos.</div>
+
           <div id="taskList"></div>
-          <div class="new-task">
+          <div class="new-task" id="newTaskRow">
             <span class="ghost-check"></span>
             <input type="text" id="newTaskInput" placeholder="Añadir tarea o nota…" autocomplete="off">
             <button class="mini-btn hidden" id="micBtn" title="Dictar" aria-label="Dictar">🎙</button>
@@ -240,7 +253,7 @@
   </main>
 
   <!-- barra flotante de dibujo -->
-  <div class="dock">
+  <div class="dock" id="dock">
     <div class="dock-tools" id="dockTools">
       <button class="swatch sel" data-color="#1C1C1A" style="background:#1C1C1A" aria-label="Tinta"></button>
       <button class="swatch" data-color="#1F7A4D" style="background:#1F7A4D" aria-label="Verde"></button>
@@ -284,6 +297,7 @@
 
       <div class="sidebar-block">
         <div class="inner" style="padding-top:0">
+          <button class="tool-btn" id="soundBtn">🔊 sonido: activado</button>
           <button class="tool-btn" id="exportBtn">⤓ exportar copia (.json)</button>
           <button class="tool-btn" id="importBtn">⤒ importar copia</button>
           <input type="file" id="importFile" accept="application/json" class="hidden">
@@ -335,6 +349,39 @@
   function persistDebounced() { clearTimeout(saveTimer); saveTimer = setTimeout(() => persist(), 500); }
 
   const $ = id => document.getElementById(id);
+
+  // ================= efectos de sonido (sintetizados, sin archivos) =================
+  let actx = null, soundOn = (local.getPref('agenda-sound') !== '0');
+  function ensureAudio() {
+    if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } }
+    if (actx && actx.state === 'suspended') actx.resume().catch(()=>{});
+  }
+  // desbloquea el audio en el primer toque (política de autoplay del navegador)
+  window.addEventListener('pointerdown', ensureAudio, { once: false });
+  function blip(freq, dur, type, vol, slideTo) {
+    if (!actx) return;
+    const t = actx.currentTime;
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = type || 'sine'; o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.09, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(actx.destination);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+  function sfx(kind) {
+    if (!soundOn) return;
+    ensureAudio(); if (!actx) return;
+    switch (kind) {
+      case 'open':   blip(560, 0.12, 'sine', 0.08, 880); break;   // entrar en un pensamiento
+      case 'create': blip(440, 0.10, 'triangle', 0.09, 660); setTimeout(()=>blip(880,0.10,'sine',0.07),90); break;
+      case 'photo':  blip(700, 0.09, 'sine', 0.08, 1040); break;  // foto añadida
+      case 'pickup': blip(320, 0.07, 'sine', 0.07, 420); break;   // coger (mover/redimensionar)
+      case 'drop':   blip(420, 0.09, 'sine', 0.07, 300); break;   // soltar
+      default: blip(500, 0.08, 'sine', 0.07);
+    }
+  }
 
   // ================= sincronización (Firestore) =================
   let fb = null;            // { fs, db, key, unsub, unsubP }
@@ -489,13 +536,21 @@
     const d = days[viewKey];
     let tab = null;
     if (viewTab) { tab = ((d && d.tabs) || []).find(t => t.id === viewTab) || null; if (!tab) viewTab = null; }
+    const inTab = !!tab;
     $('dateName').textContent = tab ? (tab.name || 'pensamiento') : fmtName(viewKey);
     $('dateName').style.cursor = tab ? 'pointer' : '';
     $('dateName').title = tab ? 'Tocar para renombrar' : '';
-    $('backToday').classList.toggle('hidden', isToday || !!tab);
-    $('exitTab').classList.toggle('hidden', !tab);
-    $('moveBtn').classList.toggle('hidden', !tab);
-    if (!tab && tool === 'move') setTool('pen');
+    $('backToday').classList.toggle('hidden', isToday || inTab);
+    $('exitTab').classList.toggle('hidden', !inTab);
+    $('moveBtn').classList.toggle('hidden', !inTab);
+
+    // escribir / dibujar / fotos SOLO dentro de un pensamiento; la hoja del día es solo el índice
+    $('newTaskRow').classList.toggle('hidden', !inTab);
+    $('taskList').classList.toggle('hidden', !inTab);
+    $('dock').classList.toggle('hidden', !inTab);
+    $('dayHint').classList.toggle('hidden', inTab);
+    if (!inTab) { if (drawMode) setDrawMode(false); if (tool === 'move') setTool('pen'); }
+
     renderTabs();
     renderTasks();
     renderPhotos();
@@ -512,6 +567,7 @@
     const d = days[viewKey] || {};
     (d.tabs||[]).forEach(t => {
       const chip = document.createElement('button'); chip.className = 'tab-chip';
+      chip.style.fontSize = (15 * (t.size || 1)) + 'px';
       const nm = document.createElement('span'); nm.className = 't-name'; nm.textContent = t.name || 'pensamiento';
       const items = t.items||[]; const done = items.filter(i=>i.done).length;
       let m = ''; if (items.length) m += done+'/'+items.length;
@@ -520,23 +576,59 @@
       chip.appendChild(nm);
       if (m) { const meta = document.createElement('span'); meta.className='t-meta'; meta.textContent = m; chip.appendChild(meta); }
       const del = document.createElement('span'); del.className='t-del'; del.textContent='×';
+      del.onpointerdown = ev => ev.stopPropagation();
       del.onclick = ev => { ev.stopPropagation(); deleteTab(t.id); };
       chip.appendChild(del);
-      chip.onclick = () => { viewTab = t.id; render(); };
+      attachBubbleGestures(chip, t);
       row.appendChild(chip);
     });
     const add = document.createElement('button'); add.className = 'tab-chip tab-new'; add.textContent = '+ pensamiento';
     add.onclick = createTab;
     row.appendChild(add);
   }
+
+  // toque corto = abrir; pulsación larga = redimensionar la burbuja arrastrando
+  function attachBubbleGestures(chip, t) {
+    let timer = null, resizing = false, startX = 0, startSize = 0, moved = false, downId = null;
+    const startResize = () => {
+      resizing = true; chip.classList.add('resizing'); sfx('pickup');
+      if (navigator.vibrate) navigator.vibrate(12);
+    };
+    chip.addEventListener('pointerdown', e => {
+      downId = e.pointerId; moved = false; resizing = false;
+      startX = e.clientX; startSize = t.size || 1;
+      chip.setPointerCapture(e.pointerId);
+      timer = setTimeout(startResize, 380);
+    });
+    chip.addEventListener('pointermove', e => {
+      if (e.pointerId !== downId) return;
+      if (!resizing) {
+        if (Math.abs(e.clientX - startX) > 8) { moved = true; clearTimeout(timer); }
+        return;
+      }
+      e.preventDefault();
+      const s = Math.max(0.8, Math.min(2.4, startSize + (e.clientX - startX) / 140));
+      t.size = Math.round(s * 100) / 100;
+      chip.style.fontSize = (15 * t.size) + 'px';
+    });
+    const end = e => {
+      if (e.pointerId !== downId) return;
+      clearTimeout(timer); downId = null;
+      if (resizing) { resizing = false; chip.classList.remove('resizing'); sfx('drop'); persist(); renderSidebar(); }
+      else if (!moved) { sfx('open'); viewTab = t.id; render(); }
+    };
+    chip.addEventListener('pointerup', end);
+    chip.addEventListener('pointercancel', e => { clearTimeout(timer); if (resizing) { resizing=false; chip.classList.remove('resizing'); } downId=null; });
+  }
+
   function createTab() {
     const name = prompt('Nombre del pensamiento', '');
     if (name === null) return;
-    const t = { id: uid(), name: name.trim() || 'pensamiento', items: [], strokes: [] };
+    const t = { id: uid(), name: name.trim() || 'pensamiento', items: [], strokes: [], size: 1 };
     const d = day(); if (!d.tabs) d.tabs = [];
     d.tabs.push(t);
     viewTab = t.id;
-    persist(); render();
+    sfx('create'); persist(); render();
   }
   function deleteTab(id) {
     const d = days[viewKey]; if (!d) return;
@@ -597,6 +689,7 @@
     el.style.top = (p.y/LW*cssW) + 'px';
     el.style.width = (p.w/LW*100) + '%';
   }
+  function savePhotoPos(p) { p.u = Date.now(); local.save(days); pushPhoto(viewKey, p); renderSidebar(); }
   function renderFreePhotos() {
     const layer = $('freeLayer'); layer.innerHTML = ''; photoEls.clear();
     if (!viewTab) return;
@@ -606,11 +699,57 @@
       const el = document.createElement('div'); el.className = 'free-photo';
       positionPhoto(el, p);
       const img = document.createElement('img'); img.src = p.img; img.alt = 'foto'; img.loading = 'lazy';
-      img.onclick = () => { $('lightboxImg').src = p.img; $('lightbox').classList.add('show'); };
       const del = document.createElement('button'); del.className = 'photo-del'; del.textContent = '×';
-      del.setAttribute('aria-label','Eliminar foto'); del.onclick = () => removePhoto(p.id);
-      el.append(img, del); layer.appendChild(el); photoEls.set(p.id, el);
+      del.setAttribute('aria-label','Eliminar foto');
+      del.onpointerdown = ev => ev.stopPropagation();
+      del.onclick = ev => { ev.stopPropagation(); removePhoto(p.id); };
+      const grip = document.createElement('div'); grip.className = 'ph-resize'; grip.title = 'Redimensionar';
+      el.append(img, del, grip); layer.appendChild(el); photoEls.set(p.id, el);
+      attachFreePhotoGestures(el, img, grip, p);
     });
+  }
+
+  // dentro del pensamiento: pulsación larga sobre la imagen para moverla; asa para redimensionar
+  function attachFreePhotoGestures(el, img, grip, p) {
+    const aspect = () => (p.h && p.w) ? p.h / p.w : 1;
+    // --- mover (pulsación larga) ---
+    let timer=null, armed=false, moved=false, sx=0, sy=0, ox=0, oy=0, downId=null;
+    img.addEventListener('pointerdown', e => {
+      downId = e.pointerId; armed=false; moved=false; sx=e.clientX; sy=e.clientY; ox=p.x; oy=p.y;
+      img.setPointerCapture(e.pointerId);
+      timer = setTimeout(() => { armed=true; el.classList.add('grabbing'); sfx('pickup'); if (navigator.vibrate) navigator.vibrate(12); }, 300);
+    });
+    img.addEventListener('pointermove', e => {
+      if (e.pointerId !== downId) return;
+      const dx=e.clientX-sx, dy=e.clientY-sy;
+      if (!armed) { if (Math.hypot(dx,dy) > 10) { moved=true; clearTimeout(timer); } return; }
+      e.preventDefault(); moved=true;
+      p.x = Math.max(0, ox + dx/cssW*LW);
+      p.y = Math.max(0, oy + dy/cssW*LW);
+      positionPhoto(el, p);
+    });
+    const endMoveP = e => {
+      if (e.pointerId !== downId) return;
+      clearTimeout(timer); downId=null;
+      if (armed) { armed=false; el.classList.remove('grabbing'); sfx('drop'); savePhotoPos(p); }
+      else if (!moved) { $('lightboxImg').src = p.img; $('lightbox').classList.add('show'); }
+    };
+    img.addEventListener('pointerup', endMoveP);
+    img.addEventListener('pointercancel', e => { clearTimeout(timer); if (armed){armed=false; el.classList.remove('grabbing');} downId=null; });
+    // --- redimensionar (asa) ---
+    let rId=null, rsx=0, rsW=0;
+    grip.addEventListener('pointerdown', e => {
+      e.stopPropagation(); rId=e.pointerId; rsx=e.clientX; rsW=p.w;
+      grip.setPointerCapture(e.pointerId); el.classList.add('grabbing'); sfx('pickup');
+    });
+    grip.addEventListener('pointermove', e => {
+      if (e.pointerId !== rId) return; e.preventDefault();
+      p.w = Math.max(120, Math.min(LW, rsW + (e.clientX-rsx)/cssW*LW));
+      p.h = Math.round(p.w * aspect());
+      positionPhoto(el, p);
+    });
+    grip.addEventListener('pointerup', e => { if (e.pointerId!==rId) return; rId=null; el.classList.remove('grabbing'); sfx('drop'); savePhotoPos(p); });
+    grip.addEventListener('pointercancel', e => { rId=null; el.classList.remove('grabbing'); });
   }
   function repositionPhotos() {
     photoEls.forEach((el, id) => {
@@ -686,7 +825,7 @@
         }
         if (!day().photos) day().photos = [];
         day().photos.push(photo);
-        local.save(days); pushPhoto(viewKey, photo); render();
+        local.save(days); pushPhoto(viewKey, photo); sfx('photo'); render();
       };
       img.onerror = () => alert('No se pudo leer la imagen.');
       img.src = rd.result;
@@ -869,6 +1008,11 @@
 
   // lightbox cerrar
   $('lightbox').onclick = () => $('lightbox').classList.remove('show');
+
+  // ================= sonido =================
+  function refreshSoundBtn() { $('soundBtn').textContent = soundOn ? '🔊 sonido: activado' : '🔇 sonido: apagado'; }
+  $('soundBtn').onclick = () => { soundOn = !soundOn; local.setPref('agenda-sound', soundOn ? '1' : '0'); refreshSoundBtn(); if (soundOn) sfx('open'); };
+  refreshSoundBtn();
 
   // ================= exportar / importar =================
   $('exportBtn').onclick = () => {
