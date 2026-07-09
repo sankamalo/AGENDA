@@ -84,8 +84,16 @@
     display: flex; align-items: center; gap: 0.55em;
     border-radius: 999px; border: 1px solid var(--ink-faint); background: var(--paper);
     padding: 0.55em 1em; font-size: 15px; font-family: inherit; color: var(--ink); cursor: pointer;
-    touch-action: none; user-select: none; transition: box-shadow .12s, border-color .12s;
+    touch-action: none; transition: box-shadow .12s, border-color .12s;
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
   }
+  .tab-chip, .tab-chip * { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .tab-chip.linksel { border-color: var(--verde); box-shadow: 0 0 0 3px var(--verde-soft); }
+  .link-hint { font-family: var(--mono); font-size: 12px; color: var(--verde); align-self: center; }
+
+  /* cables entre pensamientos (con físicas ligeras) */
+  .cable-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: visible; }
+  .cable-layer path { fill: none; stroke: var(--ink-soft); stroke-width: 2.2; stroke-linecap: round; opacity: .5; }
   .tab-chip.free { position: absolute; pointer-events: auto; box-shadow: 0 2px 10px rgba(0,0,0,.08); white-space: nowrap; }
   .tab-chip.grabbing { box-shadow: 0 8px 24px rgba(0,0,0,.22); z-index: 5; }
   /* "jiggle" sutil cuando se está reordenando */
@@ -373,6 +381,7 @@
 
           <div class="photos hidden" id="photos"></div>
         </div>
+        <svg class="cable-layer hidden" id="cableLayer"></svg>
         <div class="bubble-layer" id="bubbleLayer"></div>
         <div class="free-layer" id="freeLayer"></div>
       </div>
@@ -434,6 +443,7 @@
       <div class="sidebar-block">
         <div class="inner" style="padding-top:0">
           <button class="tool-btn" id="soundBtn">🔊 sonido: activado</button>
+          <button class="tool-btn" id="physicsBtn">🧲 cables con físicas: sí</button>
           <button class="tool-btn" id="exportBtn">⤓ exportar copia (.json)</button>
           <button class="tool-btn" id="importBtn">⤒ importar copia</button>
           <input type="file" id="importFile" accept="application/json" class="hidden">
@@ -467,7 +477,7 @@
   // days[HOME] = { items, strokes, photos:[{id,img,u,tab?,x?,y?,w?,h?}],
   //               tabs:[{id,name,items,strokes,size?,created?}], u }
   const HOME = 'home';
-  const VERSION = 'v15';
+  const VERSION = 'v16';
   let days = {};
   let viewKey = HOME;
   let viewTab = null; // id de la pestaña de pensamiento abierta (null = hoja principal)
@@ -824,9 +834,16 @@
   function mkToolBtn(txt, fn, extra) { const b=document.createElement('button'); b.className='tab-chip '+(extra||''); b.textContent=txt; b.onclick=fn; return b; }
   function renderHomeTools(count) {
     const tb = $('homeTools'); tb.innerHTML = '';
+    if (linkMode) {
+      const hint = document.createElement('span'); hint.className='link-hint';
+      hint.textContent = linkFirst ? 'Toca otro para unir / soltar' : 'Toca un pensamiento';
+      tb.append(hint, mkToolBtn('listo', () => { linkMode=false; linkFirst=null; renderTabs(); }, 'tab-new'));
+      return;
+    }
     if (!selectMode) {
       tb.appendChild(mkToolBtn('+ pensamiento', createTab, 'tab-new'));
       if (count > 0) tb.appendChild(mkToolBtn('⤓ exportar', () => { selectMode=true; selectedTabs.clear(); renderTabs(); }, 'tab-new'));
+      if (count > 1) tb.appendChild(mkToolBtn('🔗 conectar', () => { linkMode=true; linkFirst=null; renderTabs(); }, 'tab-new'));
     } else {
       const go = document.createElement('button'); go.className='tab-chip tab-export'; go.textContent = '⤓ exportar (' + selectedTabs.size + ')';
       go.disabled = selectedTabs.size===0; go.onclick = () => exportThoughts([...selectedTabs]);
@@ -839,7 +856,7 @@
     $('homeTools').classList.toggle('hidden', !inHome);
     $('bubbleLayer').classList.toggle('hidden', !inHome);
     const layer = $('bubbleLayer'); layer.innerHTML = ''; layer.classList.remove('jiggle');
-    if (!inHome) { selectMode = false; return; }
+    if (!inHome) { selectMode = false; linkMode = false; linkFirst = null; renderCables(); return; }
     const d = days[HOME] || {};
     renderHomeTools((d.tabs||[]).length); // primero la barra (para medir la cabecera)
     const baseY = homeBaseY();
@@ -847,7 +864,8 @@
     (d.tabs||[]).forEach((t, i) => {
       if (!tabMatches(t, q)) return;
       const g = bubbleGeo(t, i, baseY);
-      const chip = document.createElement('button'); chip.className = 'tab-chip free' + (selectMode && selectedTabs.has(t.id) ? ' sel' : '');
+      const chip = document.createElement('button');
+      chip.className = 'tab-chip free' + (selectMode && selectedTabs.has(t.id) ? ' sel' : '') + (linkMode && linkFirst===t.id ? ' linksel' : '');
       chip.dataset.tid = t.id;
       if (selectMode) { const chk = document.createElement('span'); chk.className='t-chk'; chk.textContent = selectedTabs.has(t.id)?'✓':'○'; chip.appendChild(chk); }
       const dot = document.createElement('span'); dot.className='t-dot'; if (t.color) dot.style.background = t.color; chip.appendChild(dot);
@@ -858,7 +876,14 @@
       if ((d.photos||[]).some(p => p.tab === t.id)) m += (m?' · ':'')+'📷';
       chip.appendChild(nm);
       if (m) { const meta = document.createElement('span'); meta.className='t-meta'; meta.textContent = m; chip.appendChild(meta); }
-      if (selectMode) {
+      if (linkMode) {
+        chip.onclick = () => {
+          if (!linkFirst) { linkFirst = t.id; sfx('pickup'); }
+          else if (linkFirst === t.id) { linkFirst = null; sfx('drop'); }
+          else { toggleLink(linkFirst, t.id); sfx('create'); if (navigator.vibrate) navigator.vibrate(14); }
+          renderTabs();
+        };
+      } else if (selectMode) {
         chip.onclick = () => { if (selectedTabs.has(t.id)) selectedTabs.delete(t.id); else selectedTabs.add(t.id); sfx('open'); renderTabs(); };
       } else {
         const del = document.createElement('span'); del.className='t-del'; del.textContent='×';
@@ -870,6 +895,8 @@
       layer.appendChild(chip);
       positionBubble(chip, g);
     });
+    renderCables();
+    if (physicsOn) kickCables();
   }
 
   // exporta uno o varios pensamientos (con fotos y texto en el mismo .json)
@@ -898,17 +925,21 @@
   // (centro mueve, borde/esquina inf-der redimensiona). Al coger, todas hacen
   // "jiggle" y hay vibración suave. Posición/tamaño son locales (g).
   function attachBubble(chip, t, g) {
-    const EDGE = 22;
+    const EDGE = 26;
     let id=null, armed=false, moved=false, mode='move', sx=0, sy=0, ox=0, oy=0, sSize=1, timer=null;
-    // las burbujas son bajas: el redimensionar es solo el borde DERECHO (el resto mueve)
-    function regionAt(e) { const r=chip.getBoundingClientRect(); return ((r.right-e.clientX) <= EDGE) ? 'resize' : 'move'; }
+    // redimensionar = borde IZQUIERDO (lado del punto de color; la × está a la derecha)
+    function regionAt(e) { const r=chip.getBoundingClientRect(); return ((e.clientX - r.left) <= EDGE) ? 'resize' : 'move'; }
+    chip.addEventListener('contextmenu', e => e.preventDefault());        // sin menú/selección iOS
+    chip.addEventListener('selectstart', e => e.preventDefault());
     chip.addEventListener('pointerdown', e => {
       if (e.target.closest('.t-del')) return;
+      e.preventDefault();                                                 // bloquea la selección de texto de iOS
       id=e.pointerId; armed=false; moved=false; mode=regionAt(e);
       sx=e.clientX; sy=e.clientY; ox=g.x; oy=g.y; sSize=g.size||1;
       timer = setTimeout(() => {
         armed=true; movingFree=true; chip.classList.add('grabbing'); $('bubbleLayer').classList.add('jiggle');
         try { chip.setPointerCapture(id); } catch(err){}
+        const sel = window.getSelection && window.getSelection(); if (sel && sel.removeAllRanges) sel.removeAllRanges();
         sfx('pickup'); if (navigator.vibrate) navigator.vibrate([8,28,8]);
       }, 320);
     });
@@ -919,8 +950,8 @@
       e.preventDefault(); moved=true;
       const w = sheet.clientWidth || cssW || 360;
       if (mode === 'move') { g.x = Math.max(0, ox + dx/w*LW); g.y = Math.max(0, oy + dy/w*LW); }
-      else { const s = Math.max(0.8, Math.min(2.6, sSize + (Math.abs(dx)>=Math.abs(dy)?dx:dy)/160)); g.size = Math.round(s*100)/100; }
-      positionBubble(chip, g); updateSheetHeight();
+      else { const s = Math.max(0.8, Math.min(2.6, sSize + (-dx)/160)); g.size = Math.round(s*100)/100; } // tirar hacia fuera (izq) agranda
+      positionBubble(chip, g); updateSheetHeight(); kickCables();
     });
     const end = e => {
       if (e.pointerId !== id) return; clearTimeout(timer); id=null;
@@ -930,6 +961,73 @@
     };
     chip.addEventListener('pointerup', end);
     chip.addEventListener('pointercancel', e => { clearTimeout(timer); $('bubbleLayer').classList.remove('jiggle'); if (armed){armed=false; movingFree=false; chip.classList.remove('grabbing');} id=null; });
+  }
+
+  // ================= cables entre pensamientos (con físicas ligeras) =================
+  let linkMode = false, linkFirst = null;
+  let physicsOn = (local.getPref('agenda-physics') !== '0');
+  const cables = []; let cableRAF = null;
+  function toggleLink(a, b) {
+    if (a === b) return;
+    const d = days[HOME] || {}; const ta=(d.tabs||[]).find(t=>t.id===a), tb=(d.tabs||[]).find(t=>t.id===b);
+    if (!ta || !tb) return;
+    ta.links = ta.links||[]; tb.links = tb.links||[];
+    if (ta.links.includes(b)) { ta.links = ta.links.filter(x=>x!==b); tb.links = tb.links.filter(x=>x!==a); }
+    else { ta.links.push(b); tb.links.push(a); }
+    persist();
+  }
+  function unlinkAll(id) {
+    (days[HOME].tabs||[]).forEach(t => { if (t.links) t.links = t.links.filter(x => x !== id); });
+  }
+  function bubbleCenter(id) {
+    const chip = $('bubbleLayer').querySelector('[data-tid="'+id+'"]');
+    if (!chip) return null;
+    return { x: chip.offsetLeft + chip.offsetWidth/2, y: chip.offsetTop + chip.offsetHeight/2 };
+  }
+  function uniqueLinks() {
+    const d = days[HOME]||{}; const ids = new Set((d.tabs||[]).map(t=>t.id));
+    const seen = new Set(); const out = [];
+    (d.tabs||[]).forEach(t => (t.links||[]).forEach(o => {
+      if (!ids.has(o)) return;
+      const key = t.id < o ? t.id+'|'+o : o+'|'+t.id;
+      if (seen.has(key)) return; seen.add(key); out.push([t.id, o]);
+    }));
+    return out;
+  }
+  function cableSag(A, B) { if (!A||!B) return 30; const d = Math.hypot(A.x-B.x, A.y-B.y); return Math.min(120, 18 + d*0.14); }
+  function drawCables() {
+    cables.forEach(c => {
+      const A = bubbleCenter(c.a), B = bubbleCenter(c.b);
+      if (!A || !B) { c.path.setAttribute('d',''); return; }
+      c.path.setAttribute('d', 'M '+A.x.toFixed(1)+' '+A.y.toFixed(1)+' Q '+c.cx.toFixed(1)+' '+c.cy.toFixed(1)+' '+B.x.toFixed(1)+' '+B.y.toFixed(1));
+    });
+  }
+  function stepCables() {
+    cableRAF = null; let moving = false;
+    cables.forEach(c => {
+      const A = bubbleCenter(c.a), B = bubbleCenter(c.b); if (!A||!B) return;
+      const tx = (A.x+B.x)/2, ty = (A.y+B.y)/2 + cableSag(A,B);
+      c.vx += (tx-c.cx)*0.18; c.vy += (ty-c.cy)*0.18;
+      c.vx *= 0.80; c.vy *= 0.80; c.cx += c.vx; c.cy += c.vy;
+      if (Math.abs(c.vx)+Math.abs(c.vy) > 0.35 || Math.abs(tx-c.cx)+Math.abs(ty-c.cy) > 0.6) moving = true;
+    });
+    drawCables();
+    if (moving && physicsOn) cableRAF = requestAnimationFrame(stepCables);
+  }
+  function kickCables() { if (!physicsOn) { drawCables(); return; } if (!cableRAF) cableRAF = requestAnimationFrame(stepCables); }
+  function renderCables() {
+    const svg = $('cableLayer'); const show = !viewTab;
+    svg.classList.toggle('hidden', !show);
+    svg.innerHTML = ''; cables.length = 0;
+    if (cableRAF) { cancelAnimationFrame(cableRAF); cableRAF = null; }
+    if (!show) return;
+    uniqueLinks().forEach(([a,b]) => {
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path'); svg.appendChild(path);
+      const A = bubbleCenter(a), B = bubbleCenter(b);
+      const mx = A&&B ? (A.x+B.x)/2 : 0, my = A&&B ? (A.y+B.y)/2 + cableSag(A,B) : 0;
+      cables.push({ a, b, path, cx: mx, cy: my, vx: 0, vy: 0 });
+    });
+    drawCables();
   }
 
   function createTab() {
@@ -962,7 +1060,7 @@
     d.tabs = (d.tabs||[]).filter(t => t.id !== id);
     (d.photos||[]).filter(p => p.tab === id).forEach(p => deletePhotoRemote(p.id));
     d.photos = (d.photos||[]).filter(p => p.tab !== id);
-    dropLayout(id);
+    unlinkAll(id); dropLayout(id);
     if (viewTab === id) viewTab = null;
     persist(); render();
   }
@@ -1200,6 +1298,7 @@
     redraw();
     repositionPhotos();
     repositionBubbles();
+    if (!viewTab) drawCables();
   }
   function L2Px(pt) { return [ pt[0]/LW*cssW, pt[1]/LW*cssW ]; } // ambas coord escalan por ancho
   function toLogical(e) {
@@ -1363,6 +1462,9 @@
   function refreshSoundBtn() { $('soundBtn').textContent = soundOn ? '🔊 sonido: activado' : '🔇 sonido: apagado'; }
   $('soundBtn').onclick = () => { soundOn = !soundOn; local.setPref('agenda-sound', soundOn ? '1' : '0'); refreshSoundBtn(); if (soundOn) sfx('open'); };
   refreshSoundBtn();
+  function refreshPhysicsBtn() { $('physicsBtn').textContent = physicsOn ? '🧲 cables con físicas: sí' : '🧲 cables con físicas: no'; }
+  $('physicsBtn').onclick = () => { physicsOn = !physicsOn; local.setPref('agenda-physics', physicsOn ? '1' : '0'); refreshPhysicsBtn(); if (physicsOn) kickCables(); else drawCables(); };
+  refreshPhysicsBtn();
 
   // ================= exportar / importar =================
   $('exportBtn').onclick = () => {
