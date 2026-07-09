@@ -31,6 +31,11 @@
     overflow: hidden;
     overscroll-behavior: none;
   }
+  /* grano de papel MUY sutil, detrás de todo */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.028'/%3E%3C/svg%3E");
+  }
 
   .app { display: flex; height: 100vh; height: 100dvh; }
   .scroll-area {
@@ -87,7 +92,31 @@
   .tab-chip .t-del:hover { color: var(--ink); }
   .tab-new { border-style: dashed; color: var(--ink-soft); font-size: 15px; }
   .tab-new:hover { color: var(--verde); }
+  .tab-chip .t-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--ink-faint); }
   .tab-chip.sel { border-color: var(--verde); background: var(--verde-soft); }
+
+  /* buscador de pensamientos */
+  .thought-search {
+    width: 100%; max-width: 340px; margin: 10px 0 2px; font-size: 15px; font-family: inherit;
+    border: 1px solid var(--ink-faint); border-radius: 999px; padding: 8px 14px;
+    background: var(--paper); color: var(--ink); outline: none;
+  }
+  .thought-search:focus { border-color: var(--verde); }
+  .thought-search::placeholder { color: var(--ink-faint); }
+
+  /* color del pensamiento: swatch en la cabecera + paleta */
+  .hdr-color {
+    width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--paper);
+    box-shadow: 0 0 0 1px var(--ink-faint); cursor: pointer; padding: 0; flex: none;
+  }
+  .color-pop {
+    display: none; position: absolute; z-index: 25; margin-top: 6px;
+    background: var(--paper); border: 1px solid var(--ink-faint); border-radius: 12px;
+    padding: 8px; gap: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.14); flex-wrap: wrap; max-width: 180px;
+  }
+  .color-pop.show { display: flex; }
+  .color-pop button { width: 24px; height: 24px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+  .color-pop button.sel { border-color: var(--ink); }
   .tab-chip .t-chk { font-family: var(--mono); font-size: 0.85em; color: var(--verde); }
   .tab-export { border-color: var(--verde); color: var(--verde); font-size: 15px; }
   .tab-export:hover { background: var(--verde-soft); }
@@ -286,6 +315,12 @@
   .sidebar-block .row { display: flex; gap: 6px; } .sidebar-block .row input { flex: 1; }
   .sync-msg { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); line-height: 1.5; }
   .storage-note { padding: 14px 22px 0; font-family: var(--mono); font-size: 10px; color: var(--ink-soft); }
+  .version-tag {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(6px + env(safe-area-inset-bottom)); z-index: 20;
+    font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+    pointer-events: none; user-select: none; letter-spacing: .05em;
+  }
 
   @media (max-width: 640px) {
     .sidebar.open { width: 100%; position: fixed; right: 0; top: 0; bottom: 0; z-index: 50; }
@@ -309,10 +344,13 @@
         <div class="content" id="content">
           <div class="date-line">
             <h1 class="date-name" id="dateName"></h1>
+            <button class="hdr-color hidden" id="hdrColor" title="Color del pensamiento" aria-label="Color del pensamiento"></button>
             <span class="tab-date hidden" id="tabDate"></span>
             <button class="readonly-tag hidden" id="exitTab">← pensamientos</button>
           </div>
+          <div class="color-pop" id="colorPop"></div>
           <div class="rule"></div>
+          <input type="text" class="thought-search hidden" id="thoughtSearch" placeholder="Buscar en pensamientos…" autocomplete="off">
           <div class="tabs-row hidden" id="tabsRow"></div>
 
           <div class="day-hint hidden" id="dayHint">Toca un pensamiento para entrar, o crea uno nuevo. Aquí dentro no se escribe ni se dibuja: todo va dentro de los pensamientos.</div>
@@ -359,6 +397,8 @@
     </div>
     <button class="fab-main" id="fabMain" aria-label="Acciones" aria-expanded="false">+</button>
   </div>
+
+  <div class="version-tag hidden" id="versionTag"></div>
 
   <div class="lightbox" id="lightbox"><img id="lightboxImg" alt=""></div>
 
@@ -417,9 +457,30 @@
   // days[HOME] = { items, strokes, photos:[{id,img,u,tab?,x?,y?,w?,h?}],
   //               tabs:[{id,name,items,strokes,size?,created?}], u }
   const HOME = 'home';
+  const VERSION = 'v13';
   let days = {};
   let viewKey = HOME;
   let viewTab = null; // id de la pestaña de pensamiento abierta (null = hoja principal)
+
+  // ---- geometría LOCAL por dispositivo (no se sincroniza) ----
+  // Solo el CONTENIDO (texto, imágenes, qué elementos hay) viaja entre
+  // dispositivos; la posición y el tamaño de fotos/notas son de cada aparato,
+  // así el tamaño cómodo en Mac no descuadra el iPhone y viceversa.
+  const LKEY = 'agenda-layout';
+  let layout = (function(){ try { return ls ? (JSON.parse(ls.getItem(LKEY)||'{}')||{}) : {}; } catch(e){ return {}; } })();
+  function saveLayout(){ if (ls) { try { ls.setItem(LKEY, JSON.stringify(layout)); } catch(e){} } }
+  // geometría local del elemento (la crea, sembrando de campos heredados o por defecto)
+  function geo(it, isPhoto) {
+    let g = layout[it.id];
+    if (!g) {
+      if (it.x != null) g = { x: it.x, y: it.y, w: it.w, h: it.h };
+      else g = isPhoto ? { x:60, y:80, w:420, h:420 } : { x:80, y:80, w:360 };
+      layout[it.id] = g; saveLayout();
+    }
+    if (isPhoto && g.h == null) g.h = g.w;
+    return g;
+  }
+  function dropLayout(id) { if (layout[id]) { delete layout[id]; saveLayout(); } }
 
   function todayKey() { const d = new Date(); const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate()); }
   function keyToDate(k) { const [y,m,d] = k.split('-').map(Number); return new Date(y, m-1, d); }
@@ -524,9 +585,9 @@
   function pushPhoto(dayKey, photo) {
     if (!fb) return;
     const ref = fb.fs.doc(fb.db, 'agendas', fb.key, 'photos', photo.id);
+    // posición/tamaño NO se sincronizan (son locales de cada dispositivo)
     const doc = { day: dayKey, img: photo.img, u: photo.u };
     if (photo.tab) doc.tab = photo.tab;
-    if (photo.x != null) { doc.x = photo.x; doc.y = photo.y; doc.w = photo.w; doc.h = photo.h || photo.w; }
     fb.fs.setDoc(ref, doc).catch(()=> setSync('err','No se pudo subir la foto. ¿Actualizaste las reglas a la versión con {document=**}?'));
   }
   function deletePhotoRemote(id) {
@@ -618,14 +679,13 @@
           } else {
             const ex = days[dk].photos.find(p => p.id === id);
             if (!ex) {
+              // posición/tamaño se resuelven localmente (geo); aquí solo el contenido
               const p = { id, img: data.img, u: data.u||0 };
               if (data.tab) p.tab = data.tab;
-              if (data.x != null) { p.x = data.x; p.y = data.y; p.w = data.w; p.h = data.h; }
               days[dk].photos.push(p); changed = true;
             } else if ((data.u||0) > (ex.u||0)) {
               ex.u = data.u||0; ex.img = data.img;
               if (data.tab) ex.tab = data.tab; else delete ex.tab;
-              if (data.x != null) { ex.x = data.x; ex.y = data.y; ex.w = data.w; ex.h = data.h; }
               changed = true;
             }
           }
@@ -658,16 +718,23 @@
     if (inTab) $('tabDate').textContent = tab.created ? ('creado ' + fmtShort(tab.created)) : '';
     $('exitTab').classList.toggle('hidden', !inTab);
     $('moveBtn').classList.toggle('hidden', !inTab);
+    // swatch de color del pensamiento en la cabecera
+    $('hdrColor').classList.toggle('hidden', !inTab);
+    if (inTab) $('hdrColor').style.background = tab.color || 'var(--ink-faint)';
+    if (!inTab) $('colorPop').classList.remove('show');
+    // buscador solo en la hoja principal si hay pensamientos
+    $('thoughtSearch').classList.toggle('hidden', inTab || ((d && d.tabs || []).length) < 2);
 
     // dentro de un pensamiento la hoja usa todo el ancho de la pantalla
     $('page').classList.toggle('wide', inTab);
 
-    // escribir / dibujar / fotos SOLO dentro de un pensamiento; la hoja principal es solo el índice
-    if (!inTab) taskInputOpen = false;
-    $('newTaskRow').classList.toggle('hidden', !(inTab && taskInputOpen));
+    // escribir / dibujar / fotos SOLO dentro de un pensamiento; la hoja principal es solo el índice.
+    // el input de tarea está SIEMPRE visible dentro del pensamiento (se escribe tocándolo directamente)
+    $('newTaskRow').classList.toggle('hidden', !inTab);
     $('taskList').classList.toggle('hidden', !inTab);
     $('fabCluster').classList.toggle('hidden', !inTab);
     $('dayHint').classList.toggle('hidden', inTab);
+    $('versionTag').classList.toggle('hidden', inTab);
     if (!inTab) { if (drawMode) setDrawMode(false); if (tool === 'move') setTool('pen'); closeFab(); }
 
     renderTabs();
@@ -684,26 +751,38 @@
     const w = sheet.clientWidth || cssW || 1;
     let maxY = 0;
     (curRead().strokes||[]).forEach(s => s.p.forEach(pt => { if (pt[1] > maxY) maxY = pt[1]; }));
-    (day().photos||[]).filter(p => p.tab === viewTab).forEach(p => { const b = (p.y||0)+(p.h||p.w||0); if (b > maxY) maxY = b; });
+    (day().photos||[]).filter(p => p.tab === viewTab).forEach(p => { const g = geo(p, true); const b = (g.y||0)+(g.h||g.w||0); if (b > maxY) maxY = b; });
     const tab = (day().tabs||[]).find(t => t.id === viewTab);
-    if (tab) (tab.notes||[]).forEach(n => { const el = photoEls.get(n.id); const hPx = el ? el.offsetHeight : 60; const b = (n.y||0) + hPx/w*LW; if (b > maxY) maxY = b; });
+    if (tab) (tab.notes||[]).forEach(n => { const g = geo(n, false); const el = photoEls.get(n.id); const hPx = el ? el.offsetHeight : 60; const b = (g.y||0) + hPx/w*LW; if (b > maxY) maxY = b; });
     const contentPx = maxY / LW * w;
     const floor = Math.max(window.innerHeight * 1.5, 1100);
     sheet.style.minHeight = Math.round(Math.max(floor, contentPx + 500)) + 'px';
   }
 
   // ================= pestañas de pensamiento =================
+  const TAB_COLORS = ['#1F7A4D','#2B5F8A','#C4452E','#B08900','#7A4F9E','#8A8A84'];
   let selectMode = false; const selectedTabs = new Set();
+  let thoughtQuery = '';
+  // ¿coincide el pensamiento con la búsqueda? (nombre, tareas y notas)
+  function tabMatches(t, q) {
+    if (!q) return true; q = q.toLowerCase();
+    if ((t.name||'').toLowerCase().includes(q)) return true;
+    if ((t.items||[]).some(i => (i.text||'').toLowerCase().includes(q))) return true;
+    if ((t.notes||[]).some(n => (n.text||'').toLowerCase().includes(q))) return true;
+    return false;
+  }
   function renderTabs() {
     const row = $('tabsRow');
     row.innerHTML = '';
     row.classList.toggle('hidden', !!viewTab);
     if (viewTab) { selectMode = false; return; }
     const d = days[HOME] || {};
-    (d.tabs||[]).forEach(t => {
+    const q = selectMode ? '' : thoughtQuery;
+    (d.tabs||[]).filter(t => tabMatches(t, q)).forEach(t => {
       const chip = document.createElement('button'); chip.className = 'tab-chip' + (selectMode && selectedTabs.has(t.id) ? ' sel' : '');
       chip.style.fontSize = (15 * (t.size || 1)) + 'px';
       if (selectMode) { const chk = document.createElement('span'); chk.className='t-chk'; chk.textContent = selectedTabs.has(t.id)?'✓':'○'; chip.appendChild(chk); }
+      const dot = document.createElement('span'); dot.className='t-dot'; if (t.color) dot.style.background = t.color; chip.appendChild(dot);
       const nm = document.createElement('span'); nm.className = 't-name'; nm.textContent = t.name || 'pensamiento';
       const items = t.items||[]; const done = items.filter(i=>i.done).length;
       let m = ''; if (items.length) m += done+'/'+items.length;
@@ -743,7 +822,7 @@
     const thoughts = ids.map(id => {
       const t = (d.tabs||[]).find(x => x.id === id); if (!t) return null;
       const photos = (d.photos||[]).filter(p => p.tab === id)
-        .map(p => ({ id:p.id, img:p.img, x:p.x, y:p.y, w:p.w, h:p.h }));
+        .map(p => { const g = geo(p, true); return { id:p.id, img:p.img, x:g.x, y:g.y, w:g.w, h:g.h }; });
       return { id:t.id, name:t.name||'pensamiento', created:t.created||null,
                items:t.items||[], strokes:t.strokes||[], notes:t.notes||[], photos };
     }).filter(Boolean);
@@ -795,12 +874,26 @@
   function createTab() {
     const name = prompt('Nombre del pensamiento', '');
     if (name === null) return;
-    const t = { id: uid(), name: name.trim() || 'pensamiento', items: [], strokes: [], size: 1, created: todayKey() };
     const d = day(); if (!d.tabs) d.tabs = [];
+    const color = TAB_COLORS[d.tabs.length % TAB_COLORS.length];
+    const t = { id: uid(), name: name.trim() || 'pensamiento', items: [], strokes: [], size: 1, created: todayKey(), color };
     d.tabs.push(t);
     viewTab = t.id;
     sfx('create'); persist(); render();
   }
+  // paleta de color del pensamiento (swatch en la cabecera)
+  function buildColorPop() {
+    const pop = $('colorPop'); pop.innerHTML = '';
+    const t = cur(); const curCol = (t && t.color) || '';
+    TAB_COLORS.forEach(c => {
+      const b = document.createElement('button'); b.style.background = c; if (c===curCol) b.className='sel';
+      b.onclick = () => { const tt = cur(); if (tt) { tt.color = c; persist(); } pop.classList.remove('show'); render(); };
+      pop.appendChild(b);
+    });
+  }
+  $('hdrColor').onclick = e => { e.stopPropagation(); if (!viewTab) return; buildColorPop(); $('colorPop').classList.toggle('show'); };
+  document.addEventListener('pointerdown', e => { if (!e.target.closest('#colorPop') && !e.target.closest('#hdrColor')) $('colorPop').classList.remove('show'); }, true);
+  $('thoughtSearch').addEventListener('input', e => { thoughtQuery = e.target.value.trim(); renderTabs(); });
   function deleteTab(id) {
     const d = days[HOME]; if (!d) return;
     const t = (d.tabs||[]).find(t => t.id === id);
@@ -847,18 +940,14 @@
 
   // clamp horizontal: el elemento no se sale del ancho de la hoja (simétrico izq/der)
   function clampX(x, w) { return Math.max(0, Math.min(x, Math.max(0, LW - w))); }
-  function positionItem(el, it, isPhoto) {
-    el.style.left = (clampX(it.x, it.w)/LW*100) + '%';
-    el.style.top = (it.y/LW*cssW) + 'px';
-    el.style.width = (it.w/LW*100) + '%';
-    if (isPhoto) el.style.aspectRatio = (it.w||1) + ' / ' + (it.h||it.w||1);
+  // g = geometría LOCAL (por dispositivo)
+  function positionItem(el, g, isPhoto) {
+    el.style.left = (clampX(g.x, g.w)/LW*100) + '%';
+    el.style.top = (g.y/LW*cssW) + 'px';
+    el.style.width = (g.w/LW*100) + '%';
+    if (isPhoto) el.style.aspectRatio = (g.w||1) + ' / ' + (g.h||g.w||1);
   }
-  function saveItem(it, isPhoto) {
-    movingFree = false;
-    if (isPhoto) { it.u = Date.now(); local.save(days); pushPhoto(HOME, it); }
-    else persist();
-    updateSheetHeight(); resizeInk();
-  }
+  function commitGeo() { movingFree = false; saveLayout(); updateSheetHeight(); resizeInk(); }
   function mkHandle(cls, txt, title) { const h=document.createElement('div'); h.className='fi-handle '+cls; if(txt){ const s=document.createElement('span'); s.textContent=txt; h.appendChild(s); } h.title=title; return h; }
   function mkDel(fn) { const b=document.createElement('button'); b.className='fi-handle fi-del'; const s=document.createElement('span'); s.textContent='×'; b.appendChild(s); b.setAttribute('aria-label','Eliminar'); b.onpointerdown=ev=>ev.stopPropagation(); b.onclick=ev=>{ ev.stopPropagation(); fn(); }; return b; }
   function isHandle(t) { return t && t.closest && t.closest('.fi-handle, .note-text'); }
@@ -870,24 +959,24 @@
     const tab = (d.tabs||[]).find(t => t.id === viewTab);
     // --- fotos ---
     (d.photos||[]).filter(p => p.tab === viewTab).forEach(p => {
-      if (p.x == null) { p.x = 60; p.y = 60; p.w = 420; p.h = p.h || 420; }
+      const g = geo(p, true);
       const el = document.createElement('div'); el.className = 'free-item free-photo';
       el.style.backgroundImage = 'url("' + p.img + '")';
-      positionItem(el, p, true);
+      positionItem(el, g, true);
       el.addEventListener('contextmenu', ev => ev.preventDefault());
       const move = mkHandle('fi-move','✥','Mover');
       const del = mkDel(() => removePhoto(p.id));
       const grip = mkHandle('fi-resize','','Redimensionar');
       el.append(move, del, grip); layer.appendChild(el); photoEls.set(p.id, el);
       el.addEventListener('click', e => { if (isHandle(e.target)) return; $('lightboxImg').src = p.img; $('lightbox').classList.add('show'); });
-      attachMove(el, move, p, true);
-      attachResize(el, grip, p, true);
+      attachMove(el, move, g, true);
+      attachResize(el, grip, g, true);
     });
     // --- notas de texto ---
     if (tab) (tab.notes||[]).forEach(n => {
-      if (n.x == null) { n.x = 80; n.y = 80; n.w = 360; }
+      const g = geo(n, false);
       const el = document.createElement('div'); el.className = 'free-item free-note';
-      positionItem(el, n, false);
+      positionItem(el, g, false);
       const ta = document.createElement('textarea'); ta.className = 'note-text'; ta.rows = 1; ta.value = n.text||''; ta.placeholder = 'Escribe…';
       ta.addEventListener('input', () => { autoGrow(ta); n.text = ta.value; persistDebounced(); updateSheetHeight(); });
       ta.addEventListener('pointerdown', e => e.stopPropagation()); // editar sin arrastrar
@@ -896,35 +985,35 @@
       const grip = mkHandle('fi-resize','','Ancho');
       el.append(ta, move, del, grip); layer.appendChild(el); photoEls.set(n.id, el);
       autoGrow(ta);
-      attachMove(el, move, n, false);
-      attachResize(el, grip, n, false);
+      attachMove(el, move, g, false);
+      attachResize(el, grip, g, false);
     });
   }
 
-  // asa ✥ (arriba-izq) = mover; asa (abajo-der) = tamaño. Asas dedicadas para
-  // que iOS no secuestre el gesto y para no tapar el contenido.
-  function attachMove(el, handle, it, isPhoto) {
+  // asa ✥ (arriba-izq) = mover; asa (abajo-der) = tamaño. Mueven la geometría
+  // LOCAL (g), que se guarda por dispositivo (no viaja en la sincronización).
+  function attachMove(el, handle, g, isPhoto) {
     let id=null, sx=0, sy=0, ox=0, oy=0;
     handle.addEventListener('pointerdown', e => {
       e.stopPropagation(); e.preventDefault();
-      id=e.pointerId; sx=e.clientX; sy=e.clientY; ox=it.x; oy=it.y;
+      id=e.pointerId; sx=e.clientX; sy=e.clientY; ox=g.x; oy=g.y;
       handle.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing');
       sfx('pickup'); if (navigator.vibrate) navigator.vibrate(10);
     });
     handle.addEventListener('pointermove', e => {
       if (e.pointerId !== id) return; e.preventDefault();
-      it.x = clampX(ox + (e.clientX-sx)/cssW*LW, it.w);
-      it.y = Math.max(0, oy + (e.clientY-sy)/cssW*LW);
-      positionItem(el, it, isPhoto); updateSheetHeight();
+      g.x = clampX(ox + (e.clientX-sx)/cssW*LW, g.w);
+      g.y = Math.max(0, oy + (e.clientY-sy)/cssW*LW);
+      positionItem(el, g, isPhoto); updateSheetHeight();
     });
-    handle.addEventListener('pointerup', e => { if (e.pointerId!==id) return; id=null; el.classList.remove('grabbing'); sfx('drop'); saveItem(it, isPhoto); });
+    handle.addEventListener('pointerup', e => { if (e.pointerId!==id) return; id=null; el.classList.remove('grabbing'); sfx('drop'); commitGeo(); });
     handle.addEventListener('pointercancel', e => { id=null; movingFree=false; el.classList.remove('grabbing'); });
   }
-  function attachResize(el, handle, it, isPhoto) {
+  function attachResize(el, handle, g, isPhoto) {
     let id=null, sx=0, sy=0, sW=0, aspect0=1;
     handle.addEventListener('pointerdown', e => {
       e.stopPropagation(); e.preventDefault();
-      id=e.pointerId; sx=e.clientX; sy=e.clientY; sW=it.w; aspect0 = (isPhoto && it.h && it.w) ? it.h/it.w : 1;
+      id=e.pointerId; sx=e.clientX; sy=e.clientY; sW=g.w; aspect0 = (isPhoto && g.h && g.w) ? g.h/g.w : 1;
       handle.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing'); sfx('pickup');
     });
     handle.addEventListener('pointermove', e => {
@@ -932,11 +1021,11 @@
       // el asa está abajo-derecha: arrastrar en horizontal O en vertical redimensiona
       const dx = e.clientX - sx, dy = e.clientY - sy;
       const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
-      it.w = Math.max(isPhoto?120:140, Math.min(LW, sW + delta/cssW*LW));
-      if (isPhoto) it.h = Math.round(it.w * aspect0);
-      positionItem(el, it, isPhoto); updateSheetHeight();
+      g.w = Math.max(isPhoto?120:140, Math.min(LW, sW + delta/cssW*LW));
+      if (isPhoto) g.h = Math.round(g.w * aspect0);
+      positionItem(el, g, isPhoto); updateSheetHeight();
     });
-    handle.addEventListener('pointerup', e => { if (e.pointerId!==id) return; id=null; el.classList.remove('grabbing'); sfx('drop'); saveItem(it, isPhoto); });
+    handle.addEventListener('pointerup', e => { if (e.pointerId!==id) return; id=null; el.classList.remove('grabbing'); sfx('drop'); commitGeo(); });
     handle.addEventListener('pointercancel', e => { id=null; movingFree=false; el.classList.remove('grabbing'); });
   }
   function repositionPhotos() {
@@ -944,7 +1033,7 @@
     photoEls.forEach((el, id) => {
       let it = (d.photos||[]).find(p => p.id === id), isPhoto = true;
       if (!it && tab) { it = (tab.notes||[]).find(n => n.id === id); isPhoto = false; }
-      if (it) positionItem(el, it, isPhoto);
+      if (it) positionItem(el, geo(it, isPhoto), isPhoto);
     });
   }
   // los elementos nuevos nacen DEBAJO del texto (no tapan la cabecera)
@@ -956,7 +1045,8 @@
   function createNote() {
     const tab = cur(); if (!tab || !viewTab) return;
     if (!tab.notes) tab.notes = [];
-    const n = { id: uid(), text:'', x: 60, y: freeSpawnY(0), w: 360, created: todayKey() };
+    const n = { id: uid(), text:'', created: todayKey() };
+    layout[n.id] = { x: 60, y: freeSpawnY(0), w: 360 }; saveLayout();
     tab.notes.push(n);
     sfx('create'); persist(); render();
     setTimeout(() => { const el = photoEls.get(n.id); const ta = el && el.querySelector('.note-text'); if (ta) ta.focus(); }, 40);
@@ -964,7 +1054,7 @@
   function removeNote(id) {
     const tab = cur(); if (!tab || !tab.notes) return;
     tab.notes = tab.notes.filter(n => n.id !== id);
-    persist(); render();
+    dropLayout(id); persist(); render();
   }
 
   // ================= tareas =================
@@ -1006,10 +1096,8 @@
           const d = days[HOME];
           const n = ((d && d.photos)||[]).filter(p => p.tab === viewTab).length;
           photo.tab = viewTab;
-          photo.w = 420;
-          photo.h = Math.round(420 * img.height / img.width);
-          photo.x = 40 + (n%3)*60;
-          photo.y = freeSpawnY((n%3)*50);
+          const w = 420, h = Math.round(420 * img.height / img.width);
+          layout[photo.id] = { x: 40 + (n%3)*60, y: freeSpawnY((n%3)*50), w, h }; saveLayout();
         }
         if (!day().photos) day().photos = [];
         day().photos.push(photo);
@@ -1023,7 +1111,7 @@
   function removePhoto(id) {
     const d = days[HOME]; if (!d || !d.photos) return;
     d.photos = d.photos.filter(p => p.id !== id);
-    local.save(days); deletePhotoRemote(id); render();
+    dropLayout(id); local.save(days); deletePhotoRemote(id); render();
   }
 
   // ================= dibujo (lienzo a pantalla completa) =================
@@ -1102,8 +1190,8 @@
       const d = days[viewKey] || {};
       const ph = (d.photos||[]).filter(p => p.tab === viewTab);
       for (let i = ph.length-1; i >= 0; i--) {
-        const p = ph[i];
-        if (pt[0] >= p.x && pt[0] <= p.x + p.w && pt[1] >= p.y && pt[1] <= p.y + (p.h||p.w)) return { type:'photo', p };
+        const p = ph[i]; const g = geo(p, true);
+        if (pt[0] >= g.x && pt[0] <= g.x + g.w && pt[1] >= g.y && pt[1] <= g.y + (g.h||g.w)) return { type:'photo', p };
       }
     }
     return null;
@@ -1111,7 +1199,7 @@
   function endMove() {
     if (!moveTarget) return;
     if (moveTarget.type === 'stroke') persistDebounced();
-    else { const p = moveTarget.p; p.u = Date.now(); local.save(days); pushPhoto(viewKey, p); }
+    else saveLayout(); // la posición de la foto es local
     moveTarget = null;
   }
 
@@ -1139,7 +1227,7 @@
     else if (gesture==='move' && pointers.size===1 && moveTarget) {
       const pt = toLogical(e); const dx = pt[0]-lastPt[0], dy = pt[1]-lastPt[1]; lastPt = pt;
       if (moveTarget.type === 'stroke') { moveTarget.s.p.forEach(p => { p[0]+=dx; p[1]+=dy; }); redraw(); }
-      else { const p = moveTarget.p; p.x+=dx; p.y+=dy; const el = photoEls.get(p.id); if (el) positionItem(el, p, true); }
+      else { const p = moveTarget.p; const g = geo(p, true); g.x+=dx; g.y+=dy; const el = photoEls.get(p.id); if (el) positionItem(el, g, true); }
     }
   });
   function liftPointer(e) {
@@ -1154,13 +1242,10 @@
   canvas.addEventListener('pointercancel', liftPointer);
 
   // ================= botonera flotante desplegable =================
-  let fabOpen = false, taskInputOpen = false;
+  let fabOpen = false;
   function closeFab() { fabOpen = false; $('fabCluster').classList.remove('open'); $('fabMain').setAttribute('aria-expanded','false'); }
   function toggleFab() { fabOpen = !fabOpen; $('fabCluster').classList.toggle('open', fabOpen); $('fabMain').setAttribute('aria-expanded', fabOpen); }
-  function openTaskInput() {
-    taskInputOpen = true; $('newTaskRow').classList.remove('hidden');
-    const inp = $('newTaskInput'); inp.focus();
-  }
+  function openTaskInput() { $('newTaskInput').focus(); } // el input ya está visible; sólo enfoca
   function setDrawMode(on) {
     drawMode = on;
     canvas.className = 'ink ' + (on?'draw':'write');
@@ -1177,8 +1262,6 @@
   $('actDraw').onclick = () => { closeFab(); setDrawMode(true); };
   // cerrar la botonera al tocar fuera
   document.addEventListener('pointerdown', e => { if (fabOpen && !e.target.closest('#fabCluster')) closeFab(); }, true);
-  // ocultar el input de tarea al salir si queda vacío
-  $('newTaskInput').addEventListener('blur', () => { if (!$('newTaskInput').value.trim()) { taskInputOpen = false; $('newTaskRow').classList.add('hidden'); } });
 
   function setTool(t) { tool = t; $('moveBtn').classList.toggle('sel', t==='move'); }
   $('moveBtn').onclick = () => setTool(tool==='move' ? 'pen' : 'move');
@@ -1279,6 +1362,7 @@
   $('fbConfig').value = local.getPref('agenda-fb-config')||'';
   $('syncKey').value = local.getPref('agenda-sync-key')||'';
   $('storageNote').textContent = localMode;
+  $('versionTag').textContent = VERSION;
   render();
   connectSync();
 
