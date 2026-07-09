@@ -77,13 +77,22 @@
 
   /* pestañas de pensamiento */
   .day-hint { color: var(--ink-soft); font-size: 15px; line-height: 1.5; padding: 4px 0 2px; max-width: 34em; }
-  .tabs-row { display: flex; flex-wrap: wrap; gap: 10px; padding: 18px 0 4px; align-items: center; }
+  .home-tools { display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 0 4px; align-items: center; }
+  /* lienzo libre de burbujas (pantalla principal) */
+  .bubble-layer { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
   .tab-chip {
     display: flex; align-items: center; gap: 0.55em;
     border-radius: 999px; border: 1px solid var(--ink-faint); background: var(--paper);
     padding: 0.55em 1em; font-size: 15px; font-family: inherit; color: var(--ink); cursor: pointer;
     touch-action: none; user-select: none; transition: box-shadow .12s, border-color .12s;
   }
+  .tab-chip.free { position: absolute; pointer-events: auto; box-shadow: 0 2px 10px rgba(0,0,0,.08); white-space: nowrap; }
+  .tab-chip.grabbing { box-shadow: 0 8px 24px rgba(0,0,0,.22); z-index: 5; }
+  /* "jiggle" sutil cuando se está reordenando */
+  .bubble-layer.jiggle .tab-chip.free { animation: jiggle .32s ease-in-out infinite; }
+  .bubble-layer.jiggle .tab-chip.free.grabbing { animation: none; }
+  @keyframes jiggle { 0%,100%{ transform: rotate(-1.1deg);} 50%{ transform: rotate(1.1deg);} }
+  @media (prefers-reduced-motion: reduce) { .bubble-layer.jiggle .tab-chip.free { animation: none; } }
   .tab-chip:hover { border-color: var(--verde); }
   .tab-chip.resizing { border-color: var(--verde); box-shadow: 0 0 0 3px var(--verde-soft); }
   .tab-chip .t-name::first-letter { text-transform: uppercase; }
@@ -351,7 +360,7 @@
           <div class="color-pop" id="colorPop"></div>
           <div class="rule"></div>
           <input type="text" class="thought-search hidden" id="thoughtSearch" placeholder="Buscar en pensamientos…" autocomplete="off">
-          <div class="tabs-row hidden" id="tabsRow"></div>
+          <div class="home-tools hidden" id="homeTools"></div>
 
           <div class="day-hint hidden" id="dayHint">Toca un pensamiento para entrar, o crea uno nuevo. Aquí dentro no se escribe ni se dibuja: todo va dentro de los pensamientos.</div>
 
@@ -364,6 +373,7 @@
 
           <div class="photos hidden" id="photos"></div>
         </div>
+        <div class="bubble-layer" id="bubbleLayer"></div>
         <div class="free-layer" id="freeLayer"></div>
       </div>
     </div>
@@ -457,7 +467,7 @@
   // days[HOME] = { items, strokes, photos:[{id,img,u,tab?,x?,y?,w?,h?}],
   //               tabs:[{id,name,items,strokes,size?,created?}], u }
   const HOME = 'home';
-  const VERSION = 'v14';
+  const VERSION = 'v15';
   let days = {};
   let viewKey = HOME;
   let viewTab = null; // id de la pestaña de pensamiento abierta (null = hoja principal)
@@ -725,15 +735,16 @@
     // buscador solo en la hoja principal si hay pensamientos
     $('thoughtSearch').classList.toggle('hidden', inTab || ((d && d.tabs || []).length) < 2);
 
-    // dentro de un pensamiento la hoja usa todo el ancho de la pantalla
-    $('page').classList.toggle('wide', inTab);
+    // la hoja usa todo el ancho: dentro de un pensamiento (lienzo) y en la
+    // pantalla principal (lienzo libre de burbujas)
+    $('page').classList.add('wide');
 
     // escribir / dibujar / fotos SOLO dentro de un pensamiento; la hoja principal es solo el índice.
     // el input de tarea está SIEMPRE visible dentro del pensamiento (se escribe tocándolo directamente)
     $('newTaskRow').classList.toggle('hidden', !inTab);
     $('taskList').classList.toggle('hidden', !inTab);
     $('fabCluster').classList.toggle('hidden', !inTab);
-    $('dayHint').classList.toggle('hidden', inTab);
+    $('dayHint').classList.toggle('hidden', inTab || ((d && d.tabs || []).length) > 0);
     $('versionTag').classList.toggle('hidden', inTab);
     if (!inTab) { if (drawMode) setDrawMode(false); if (tool === 'move') setTool('pen'); closeFab(); }
 
@@ -747,7 +758,14 @@
   // dentro de un pensamiento la hoja es un lienzo grande que crece según el
   // contenido, para poder dibujar y mover imágenes muy por debajo del texto
   function updateSheetHeight() {
-    if (!viewTab) { sheet.style.minHeight = ''; return; }
+    if (!viewTab) {
+      // pantalla principal: crecer para el lienzo libre de burbujas
+      let maxBottom = 0;
+      $('bubbleLayer').querySelectorAll('.tab-chip.free').forEach(ch => { const b = ch.offsetTop + ch.offsetHeight; if (b > maxBottom) maxBottom = b; });
+      const floor = Math.max(window.innerHeight - 140, 400);
+      sheet.style.minHeight = Math.round(Math.max(floor, maxBottom + 140)) + 'px';
+      return;
+    }
     const w = sheet.clientWidth || cssW || 1;
     let maxY = 0;
     (curRead().strokes||[]).forEach(s => s.p.forEach(pt => { if (pt[1] > maxY) maxY = pt[1]; }));
@@ -771,16 +789,66 @@
     if ((t.notes||[]).some(n => (n.text||'').toLowerCase().includes(q))) return true;
     return false;
   }
-  function renderTabs() {
-    const row = $('tabsRow');
-    row.innerHTML = '';
-    row.classList.toggle('hidden', !!viewTab);
-    if (viewTab) { selectMode = false; return; }
+  // geometría LOCAL de cada burbuja en el lienzo del inicio (x/y/size por dispositivo)
+  function homeBaseY() {
+    const w = sheet.clientWidth || cssW || 360;
+    const px = Math.max(160, (($('content') && $('content').offsetHeight) || 120) + 20);
+    return Math.round(px / w * LW);
+  }
+  function bubbleGeo(t, index, baseY) {
+    let g = layout[t.id];
+    if (!g || g.x == null) {
+      const per = 2, col = index % per, rowi = Math.floor(index/per);
+      g = { x: 40 + col*430, y: (baseY||homeBaseY()) + rowi*140, size: t.size || 1 };
+      layout[t.id] = g; saveLayout();
+    }
+    if (g.size == null) g.size = t.size || 1;
+    return g;
+  }
+  function positionBubble(chip, g) {
+    const w = sheet.clientWidth || cssW || 360;
+    chip.style.fontSize = (15 * (g.size||1)) + 'px';
+    chip.style.top = (g.y/LW*w) + 'px';
+    const wpx = chip.offsetWidth || 120;
+    let xpx = g.x/LW*w;
+    xpx = Math.max(0, Math.min(xpx, Math.max(0, w - wpx)));
+    chip.style.left = xpx + 'px';
+  }
+  function repositionBubbles() {
+    if (viewTab) return;
     const d = days[HOME] || {};
+    $('bubbleLayer').querySelectorAll('.tab-chip.free').forEach(chip => {
+      const t = (d.tabs||[]).find(x => x.id === chip.dataset.tid); if (t) positionBubble(chip, bubbleGeo(t, 0));
+    });
+  }
+  function mkToolBtn(txt, fn, extra) { const b=document.createElement('button'); b.className='tab-chip '+(extra||''); b.textContent=txt; b.onclick=fn; return b; }
+  function renderHomeTools(count) {
+    const tb = $('homeTools'); tb.innerHTML = '';
+    if (!selectMode) {
+      tb.appendChild(mkToolBtn('+ pensamiento', createTab, 'tab-new'));
+      if (count > 0) tb.appendChild(mkToolBtn('⤓ exportar', () => { selectMode=true; selectedTabs.clear(); renderTabs(); }, 'tab-new'));
+    } else {
+      const go = document.createElement('button'); go.className='tab-chip tab-export'; go.textContent = '⤓ exportar (' + selectedTabs.size + ')';
+      go.disabled = selectedTabs.size===0; go.onclick = () => exportThoughts([...selectedTabs]);
+      tb.append(go, mkToolBtn('cancelar', () => { selectMode=false; selectedTabs.clear(); renderTabs(); }, 'tab-new'));
+    }
+  }
+  // pinta las burbujas en el lienzo libre + la barra de acciones
+  function renderTabs() {
+    const inHome = !viewTab;
+    $('homeTools').classList.toggle('hidden', !inHome);
+    $('bubbleLayer').classList.toggle('hidden', !inHome);
+    const layer = $('bubbleLayer'); layer.innerHTML = ''; layer.classList.remove('jiggle');
+    if (!inHome) { selectMode = false; return; }
+    const d = days[HOME] || {};
+    renderHomeTools((d.tabs||[]).length); // primero la barra (para medir la cabecera)
+    const baseY = homeBaseY();
     const q = selectMode ? '' : thoughtQuery;
-    (d.tabs||[]).filter(t => tabMatches(t, q)).forEach(t => {
-      const chip = document.createElement('button'); chip.className = 'tab-chip' + (selectMode && selectedTabs.has(t.id) ? ' sel' : '');
-      chip.style.fontSize = (15 * (t.size || 1)) + 'px';
+    (d.tabs||[]).forEach((t, i) => {
+      if (!tabMatches(t, q)) return;
+      const g = bubbleGeo(t, i, baseY);
+      const chip = document.createElement('button'); chip.className = 'tab-chip free' + (selectMode && selectedTabs.has(t.id) ? ' sel' : '');
+      chip.dataset.tid = t.id;
       if (selectMode) { const chk = document.createElement('span'); chk.className='t-chk'; chk.textContent = selectedTabs.has(t.id)?'✓':'○'; chip.appendChild(chk); }
       const dot = document.createElement('span'); dot.className='t-dot'; if (t.color) dot.style.background = t.color; chip.appendChild(dot);
       const nm = document.createElement('span'); nm.className = 't-name'; nm.textContent = t.name || 'pensamiento';
@@ -797,22 +865,11 @@
         del.onpointerdown = ev => ev.stopPropagation();
         del.onclick = ev => { ev.stopPropagation(); deleteTab(t.id); };
         chip.appendChild(del);
-        attachBubbleGestures(chip, t);
+        attachBubble(chip, t, g);
       }
-      row.appendChild(chip);
+      layer.appendChild(chip);
+      positionBubble(chip, g);
     });
-    const hasTabs = (d.tabs||[]).length > 0;
-    if (!selectMode) {
-      const add = document.createElement('button'); add.className = 'tab-chip tab-new'; add.textContent = '+ pensamiento';
-      add.onclick = createTab; row.appendChild(add);
-      if (hasTabs) { const exp = document.createElement('button'); exp.className='tab-chip tab-new'; exp.textContent='⤓ exportar'; exp.onclick = () => { selectMode=true; selectedTabs.clear(); renderTabs(); }; row.appendChild(exp); }
-    } else {
-      const go = document.createElement('button'); go.className='tab-chip tab-export'; go.textContent = '⤓ exportar (' + selectedTabs.size + ')';
-      go.disabled = selectedTabs.size===0; go.onclick = () => exportThoughts([...selectedTabs]);
-      const cancel = document.createElement('button'); cancel.className='tab-chip tab-new'; cancel.textContent='cancelar';
-      cancel.onclick = () => { selectMode=false; selectedTabs.clear(); renderTabs(); };
-      row.append(go, cancel);
-    }
   }
 
   // exporta uno o varios pensamientos (con fotos y texto en el mismo .json)
@@ -837,38 +894,42 @@
     selectMode = false; selectedTabs.clear(); renderTabs();
   }
 
-  // toque corto = abrir; pulsación larga = redimensionar la burbuja arrastrando
-  function attachBubbleGestures(chip, t) {
-    let timer = null, resizing = false, startX = 0, startSize = 0, moved = false, downId = null;
-    const startResize = () => {
-      resizing = true; chip.classList.add('resizing'); sfx('pickup');
-      if (navigator.vibrate) navigator.vibrate(12);
-    };
+  // burbuja en el lienzo libre: toque corto = abrir; pulsación larga = manipular
+  // (centro mueve, borde/esquina inf-der redimensiona). Al coger, todas hacen
+  // "jiggle" y hay vibración suave. Posición/tamaño son locales (g).
+  function attachBubble(chip, t, g) {
+    const EDGE = 22;
+    let id=null, armed=false, moved=false, mode='move', sx=0, sy=0, ox=0, oy=0, sSize=1, timer=null;
+    // las burbujas son bajas: el redimensionar es solo el borde DERECHO (el resto mueve)
+    function regionAt(e) { const r=chip.getBoundingClientRect(); return ((r.right-e.clientX) <= EDGE) ? 'resize' : 'move'; }
     chip.addEventListener('pointerdown', e => {
-      downId = e.pointerId; moved = false; resizing = false;
-      startX = e.clientX; startSize = t.size || 1;
-      chip.setPointerCapture(e.pointerId);
-      timer = setTimeout(startResize, 380);
+      if (e.target.closest('.t-del')) return;
+      id=e.pointerId; armed=false; moved=false; mode=regionAt(e);
+      sx=e.clientX; sy=e.clientY; ox=g.x; oy=g.y; sSize=g.size||1;
+      timer = setTimeout(() => {
+        armed=true; movingFree=true; chip.classList.add('grabbing'); $('bubbleLayer').classList.add('jiggle');
+        try { chip.setPointerCapture(id); } catch(err){}
+        sfx('pickup'); if (navigator.vibrate) navigator.vibrate([8,28,8]);
+      }, 320);
     });
     chip.addEventListener('pointermove', e => {
-      if (e.pointerId !== downId) return;
-      if (!resizing) {
-        if (Math.abs(e.clientX - startX) > 8) { moved = true; clearTimeout(timer); }
-        return;
-      }
-      e.preventDefault();
-      const s = Math.max(0.8, Math.min(2.4, startSize + (e.clientX - startX) / 140));
-      t.size = Math.round(s * 100) / 100;
-      chip.style.fontSize = (15 * t.size) + 'px';
+      if (e.pointerId !== id) return;
+      const dx=e.clientX-sx, dy=e.clientY-sy;
+      if (!armed) { if (Math.hypot(dx,dy) > 12) clearTimeout(timer); return; }
+      e.preventDefault(); moved=true;
+      const w = sheet.clientWidth || cssW || 360;
+      if (mode === 'move') { g.x = Math.max(0, ox + dx/w*LW); g.y = Math.max(0, oy + dy/w*LW); }
+      else { const s = Math.max(0.8, Math.min(2.6, sSize + (Math.abs(dx)>=Math.abs(dy)?dx:dy)/160)); g.size = Math.round(s*100)/100; }
+      positionBubble(chip, g); updateSheetHeight();
     });
     const end = e => {
-      if (e.pointerId !== downId) return;
-      clearTimeout(timer); downId = null;
-      if (resizing) { resizing = false; chip.classList.remove('resizing'); sfx('drop'); persist(); }
+      if (e.pointerId !== id) return; clearTimeout(timer); id=null;
+      $('bubbleLayer').classList.remove('jiggle');
+      if (armed) { armed=false; movingFree=false; chip.classList.remove('grabbing'); sfx('drop'); saveLayout(); }
       else if (!moved) { sfx('open'); viewTab = t.id; render(); }
     };
     chip.addEventListener('pointerup', end);
-    chip.addEventListener('pointercancel', e => { clearTimeout(timer); if (resizing) { resizing=false; chip.classList.remove('resizing'); } downId=null; });
+    chip.addEventListener('pointercancel', e => { clearTimeout(timer); $('bubbleLayer').classList.remove('jiggle'); if (armed){armed=false; movingFree=false; chip.classList.remove('grabbing');} id=null; });
   }
 
   function createTab() {
@@ -901,6 +962,7 @@
     d.tabs = (d.tabs||[]).filter(t => t.id !== id);
     (d.photos||[]).filter(p => p.tab === id).forEach(p => deletePhotoRemote(p.id));
     d.photos = (d.photos||[]).filter(p => p.tab !== id);
+    dropLayout(id);
     if (viewTab === id) viewTab = null;
     persist(); render();
   }
@@ -1137,6 +1199,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     redraw();
     repositionPhotos();
+    repositionBubbles();
   }
   function L2Px(pt) { return [ pt[0]/LW*cssW, pt[1]/LW*cssW ]; } // ambas coord escalan por ancho
   function toLogical(e) {
@@ -1345,7 +1408,7 @@
   function closeSidebar() { $('sidebar').classList.remove('open'); $('toggleBtn').setAttribute('aria-expanded','false'); resizeInk(); }
   $('sidebarClose').onclick = closeSidebar;
   $('toggleBtn').onclick = () => { const open = $('sidebar').classList.toggle('open'); $('toggleBtn').setAttribute('aria-expanded', open); if (!open) resizeInk(); };
-  window.addEventListener('resize', () => { updateSheetHeight(); resizeInk(); });
+  window.addEventListener('resize', () => { resizeInk(); updateSheetHeight(); });
   // refresca la fecha de arriba (cambia sola a medianoche); no toca los pensamientos
   setInterval(() => { if (!viewTab) $('dateName').textContent = fmtName(todayKey()); }, 60000);
 
