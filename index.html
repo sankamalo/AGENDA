@@ -98,8 +98,9 @@
   }
   .free-item.grabbing { z-index: 4; }
   .free-photo {
-    border-radius: 10px; overflow: hidden; cursor: grab;
-    background: var(--panel) center/cover no-repeat; box-shadow: 0 2px 12px rgba(0,0,0,.14);
+    border-radius: 10px; cursor: grab;
+    background: var(--panel) center/cover no-repeat; background-clip: padding-box;
+    box-shadow: 0 2px 12px rgba(0,0,0,.14);
   }
   .free-photo.grabbing { box-shadow: 0 8px 26px rgba(0,0,0,.28); }
   .free-note {
@@ -113,21 +114,25 @@
   }
   .free-note .note-text::placeholder { color: var(--ink-faint); }
 
-  /* asas SUTILES: puntitos en las esquinas, fuera del contenido, no lo tapan */
+  /* asas SUTILES: área táctil grande (34px) pero punto visible pequeño y
+     translúcido, centrado en la esquina y fuera del contenido (no lo tapan). */
   .fi-handle {
-    position: absolute; width: 20px; height: 20px; border-radius: 50%;
-    touch-action: none; -webkit-touch-callout: none;
+    position: absolute; width: 34px; height: 34px; border: none; padding: 0;
+    touch-action: none; -webkit-touch-callout: none; background: transparent;
     display: flex; align-items: center; justify-content: center;
-    color: #fff; font-size: 11px; line-height: 1;
-    background: var(--verde); box-shadow: 0 1px 3px rgba(0,0,0,.4);
-    opacity: .5; transition: opacity .15s;
+    color: #fff; font-size: 12px; line-height: 1; cursor: pointer;
+    opacity: .6; transition: opacity .15s;
+  }
+  .fi-handle::before {
+    content: ""; position: absolute; width: 17px; height: 17px; border-radius: 50%;
+    background: var(--verde); box-shadow: 0 1px 3px rgba(0,0,0,.35);
   }
   .fi-handle:hover, .free-item.grabbing .fi-handle, .free-item:hover .fi-handle { opacity: 1; }
-  .fi-move   { left: -8px;  top: -8px;    cursor: move; }
-  .fi-resize { right: -8px; bottom: -8px; cursor: nwse-resize; }
-  .fi-del {
-    right: -8px; top: -8px; background: rgba(0,0,0,.55); border: none; padding: 0; cursor: pointer;
-  }
+  .fi-move   { left: -17px;  top: -17px;    cursor: move; }
+  .fi-resize { right: -17px; bottom: -17px; cursor: nwse-resize; }
+  .fi-del    { right: -17px; top: -17px; cursor: pointer; }
+  .fi-del::before { background: rgba(28,28,26,.72); }
+  .fi-move span, .fi-del span, .fi-resize span { position: relative; z-index: 1; }
 
   /* tareas / notas */
   .task { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; }
@@ -183,11 +188,12 @@
     display: flex; align-items: center; justify-content: center;
   }
 
-  /* barra flotante de dibujo */
-  .dock { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 40; display: flex; align-items: center; gap: 8px; }
+  /* barra de herramientas de dibujo (flotante, centrada, encima de la botonera) */
   .dock-tools {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(88px + env(safe-area-inset-bottom)); z-index: 41;
     display: none; align-items: center; gap: 6px;
-    flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 92px);
+    flex-wrap: wrap; justify-content: center; max-width: calc(100vw - 24px);
     background: var(--paper); border: 1px solid var(--ink-faint);
     border-radius: 12px; padding: 7px 9px; box-shadow: 0 4px 16px rgba(0,0,0,.10);
   }
@@ -197,12 +203,42 @@
   .tool-btn { font-family: var(--mono); font-size: 12px; border: 1px solid var(--ink-faint); background: var(--paper); color: var(--ink); border-radius: 6px; padding: 5px 8px; cursor: pointer; }
   .tool-btn.sel { border-color: var(--verde); color: var(--verde); }
   .dock-sep { width: 1px; height: 20px; background: var(--ink-faint); }
-  .draw-fab {
-    width: 52px; height: 52px; border-radius: 50%; border: none; cursor: pointer;
-    background: var(--ink); color: var(--paper); font-size: 20px;
-    box-shadow: 0 4px 16px rgba(0,0,0,.18); display: flex; align-items: center; justify-content: center;
+
+  /* botonera flotante desplegable (dictar / escribir / foto / nota / dibujar) */
+  .fab-cluster {
+    position: fixed; right: calc(16px + env(safe-area-inset-right));
+    bottom: calc(18px + env(safe-area-inset-bottom)); z-index: 42;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
   }
-  .draw-fab.on { background: var(--verde); }
+  .fab-main {
+    width: 56px; height: 56px; border-radius: 50%; border: none; cursor: pointer;
+    background: var(--ink); color: var(--paper); font-size: 28px; font-weight: 300;
+    box-shadow: 0 4px 16px rgba(0,0,0,.22); display: flex; align-items: center; justify-content: center;
+    transition: transform .34s cubic-bezier(.34,1.56,.64,1), background .2s;
+  }
+  .fab-cluster.open .fab-main { transform: rotate(135deg); }
+  .fab-cluster.drawing .fab-main { background: var(--verde); font-size: 24px; transform: none; }
+  .fab-actions { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .fab-act {
+    width: 48px; height: 48px; border-radius: 50%; cursor: pointer;
+    border: 1px solid var(--ink-faint); background: var(--paper); color: var(--ink); font-size: 20px;
+    box-shadow: 0 3px 12px rgba(0,0,0,.14); display: flex; align-items: center; justify-content: center;
+    transform: translateY(20px) scale(.4); opacity: 0; pointer-events: none;
+    transition: transform .34s cubic-bezier(.34,1.56,.64,1), opacity .2s;
+  }
+  .fab-cluster.open .fab-act { transform: none; opacity: 1; pointer-events: auto; }
+  .fab-cluster.open .fab-act:nth-last-child(1) { transition-delay: .00s; }
+  .fab-cluster.open .fab-act:nth-last-child(2) { transition-delay: .04s; }
+  .fab-cluster.open .fab-act:nth-last-child(3) { transition-delay: .08s; }
+  .fab-cluster.open .fab-act:nth-last-child(4) { transition-delay: .12s; }
+  .fab-cluster.open .fab-act:nth-last-child(5) { transition-delay: .16s; }
+  .fab-act:hover { border-color: var(--verde); color: var(--verde); }
+  .fab-act.rec { border-color: var(--verde); color: #fff; background: var(--verde); animation: pulse 1.1s infinite; }
+  .fab-cluster.drawing .fab-actions { display: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .fab-main, .fab-act { transition: opacity .2s; }
+    .fab-cluster.open .fab-main { transform: none; }
+  }
 
   /* lightbox */
   .lightbox { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,.85); display: none; align-items: center; justify-content: center; padding: 24px; }
@@ -277,14 +313,11 @@
           <div class="day-hint hidden" id="dayHint">Toca un pensamiento para entrar, o crea uno nuevo. Aquí dentro no se escribe ni se dibuja: todo va dentro de los pensamientos.</div>
 
           <div id="taskList"></div>
-          <div class="new-task" id="newTaskRow">
+          <div class="new-task hidden" id="newTaskRow">
             <span class="ghost-check"></span>
-            <input type="text" id="newTaskInput" placeholder="Añadir tarea o nota…" autocomplete="off">
-            <button class="mini-btn hidden" id="micBtn" title="Dictar" aria-label="Dictar">🎙</button>
-            <button class="mini-btn" id="noteBtn" title="Añadir nota de texto" aria-label="Añadir nota de texto">💬</button>
-            <button class="mini-btn" id="photoBtn" title="Añadir foto" aria-label="Añadir foto">📷</button>
-            <input type="file" id="photoInput" accept="image/*" class="hidden">
+            <input type="text" id="newTaskInput" placeholder="Escribe una tarea o nota…" autocomplete="off">
           </div>
+          <input type="file" id="photoInput" accept="image/*" class="hidden">
 
           <div class="photos hidden" id="photos"></div>
         </div>
@@ -293,24 +326,33 @@
     </div>
   </main>
 
-  <!-- barra flotante de dibujo -->
-  <div class="dock" id="dock">
-    <div class="dock-tools" id="dockTools">
-      <button class="swatch sel" data-color="#1C1C1A" style="background:#1C1C1A" aria-label="Tinta"></button>
-      <button class="swatch" data-color="#1F7A4D" style="background:#1F7A4D" aria-label="Verde"></button>
-      <button class="swatch" data-color="#C4452E" style="background:#C4452E" aria-label="Rojo"></button>
-      <button class="swatch" data-color="#2B5F8A" style="background:#2B5F8A" aria-label="Azul"></button>
-      <span class="dock-sep"></span>
-      <button class="tool-btn" data-size="3">·</button>
-      <button class="tool-btn sel" data-size="6">••</button>
-      <button class="tool-btn" data-size="14">●</button>
-      <span class="dock-sep"></span>
-      <button class="tool-btn" id="eraserBtn">goma</button>
-      <button class="tool-btn hidden" id="moveBtn">✥ mover</button>
-      <button class="tool-btn" id="undoBtn">↶</button>
-      <button class="tool-btn" id="clearBtn">✕</button>
+  <!-- barra de herramientas de dibujo (aparece en modo dibujo) -->
+  <div class="dock-tools" id="dockTools">
+    <button class="swatch sel" data-color="#1C1C1A" style="background:#1C1C1A" aria-label="Tinta"></button>
+    <button class="swatch" data-color="#1F7A4D" style="background:#1F7A4D" aria-label="Verde"></button>
+    <button class="swatch" data-color="#C4452E" style="background:#C4452E" aria-label="Rojo"></button>
+    <button class="swatch" data-color="#2B5F8A" style="background:#2B5F8A" aria-label="Azul"></button>
+    <span class="dock-sep"></span>
+    <button class="tool-btn" data-size="3">·</button>
+    <button class="tool-btn sel" data-size="6">••</button>
+    <button class="tool-btn" data-size="14">●</button>
+    <span class="dock-sep"></span>
+    <button class="tool-btn" id="eraserBtn">goma</button>
+    <button class="tool-btn hidden" id="moveBtn">✥ mover</button>
+    <button class="tool-btn" id="undoBtn">↶</button>
+    <button class="tool-btn" id="clearBtn">✕</button>
+  </div>
+
+  <!-- botonera flotante: se despliega hacia arriba con animación orgánica -->
+  <div class="fab-cluster" id="fabCluster">
+    <div class="fab-actions" id="fabActions">
+      <button class="fab-act" id="actWrite" title="Escribir" aria-label="Escribir">✏️</button>
+      <button class="fab-act hidden" id="actMic" title="Dictar" aria-label="Dictar">🎙</button>
+      <button class="fab-act" id="actNote" title="Nota de texto" aria-label="Nota de texto">💬</button>
+      <button class="fab-act" id="actPhoto" title="Foto" aria-label="Foto">📷</button>
+      <button class="fab-act" id="actDraw" title="Dibujar" aria-label="Dibujar">✎</button>
     </div>
-    <button class="draw-fab" id="drawFab" title="Modo dibujo" aria-label="Modo dibujo">✎</button>
+    <button class="fab-main" id="fabMain" aria-label="Acciones" aria-expanded="false">+</button>
   </div>
 
   <div class="lightbox" id="lightbox"><img id="lightboxImg" alt=""></div>
@@ -611,11 +653,12 @@
     $('page').classList.toggle('wide', inTab);
 
     // escribir / dibujar / fotos SOLO dentro de un pensamiento; la hoja principal es solo el índice
-    $('newTaskRow').classList.toggle('hidden', !inTab);
+    if (!inTab) taskInputOpen = false;
+    $('newTaskRow').classList.toggle('hidden', !(inTab && taskInputOpen));
     $('taskList').classList.toggle('hidden', !inTab);
-    $('dock').classList.toggle('hidden', !inTab);
+    $('fabCluster').classList.toggle('hidden', !inTab);
     $('dayHint').classList.toggle('hidden', inTab);
-    if (!inTab) { if (drawMode) setDrawMode(false); if (tool === 'move') setTool('pen'); }
+    if (!inTab) { if (drawMode) setDrawMode(false); if (tool === 'move') setTool('pen'); closeFab(); }
 
     renderTabs();
     renderTasks();
@@ -769,9 +812,9 @@
     else persist();
     updateSheetHeight(); resizeInk();
   }
-  function mkHandle(cls, txt, title) { const h=document.createElement('div'); h.className='fi-handle '+cls; if(txt)h.textContent=txt; h.title=title; return h; }
-  function mkDel(fn) { const b=document.createElement('button'); b.className='fi-handle fi-del'; b.textContent='×'; b.setAttribute('aria-label','Eliminar'); b.onpointerdown=ev=>ev.stopPropagation(); b.onclick=ev=>{ ev.stopPropagation(); fn(); }; return b; }
-  function isHandle(t) { return t && t.classList && (t.classList.contains('fi-handle') || t.classList.contains('note-text')); }
+  function mkHandle(cls, txt, title) { const h=document.createElement('div'); h.className='fi-handle '+cls; if(txt){ const s=document.createElement('span'); s.textContent=txt; h.appendChild(s); } h.title=title; return h; }
+  function mkDel(fn) { const b=document.createElement('button'); b.className='fi-handle fi-del'; const s=document.createElement('span'); s.textContent='×'; b.appendChild(s); b.setAttribute('aria-label','Eliminar'); b.onpointerdown=ev=>ev.stopPropagation(); b.onclick=ev=>{ ev.stopPropagation(); fn(); }; return b; }
+  function isHandle(t) { return t && t.closest && t.closest('.fi-handle, .note-text'); }
 
   function renderFreeItems() {
     const layer = $('freeLayer'); layer.innerHTML = ''; photoEls.clear();
@@ -831,15 +874,18 @@
     handle.addEventListener('pointercancel', e => { id=null; movingFree=false; el.classList.remove('grabbing'); });
   }
   function attachResize(el, handle, it, isPhoto) {
-    let id=null, sx=0, sW=0, aspect0=1;
+    let id=null, sx=0, sy=0, sW=0, aspect0=1;
     handle.addEventListener('pointerdown', e => {
       e.stopPropagation(); e.preventDefault();
-      id=e.pointerId; sx=e.clientX; sW=it.w; aspect0 = (isPhoto && it.h && it.w) ? it.h/it.w : 1;
+      id=e.pointerId; sx=e.clientX; sy=e.clientY; sW=it.w; aspect0 = (isPhoto && it.h && it.w) ? it.h/it.w : 1;
       handle.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing'); sfx('pickup');
     });
     handle.addEventListener('pointermove', e => {
       if (e.pointerId !== id) return; e.preventDefault();
-      it.w = Math.max(isPhoto?120:140, Math.min(LW, sW + (e.clientX-sx)/cssW*LW));
+      // el asa está abajo-derecha: arrastrar en horizontal O en vertical redimensiona
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+      it.w = Math.max(isPhoto?120:140, Math.min(LW, sW + delta/cssW*LW));
       if (isPhoto) it.h = Math.round(it.w * aspect0);
       positionItem(el, it, isPhoto); updateSheetHeight();
     });
@@ -1055,15 +1101,32 @@
   canvas.addEventListener('pointerup', liftPointer);
   canvas.addEventListener('pointercancel', liftPointer);
 
+  // ================= botonera flotante desplegable =================
+  let fabOpen = false, taskInputOpen = false;
+  function closeFab() { fabOpen = false; $('fabCluster').classList.remove('open'); $('fabMain').setAttribute('aria-expanded','false'); }
+  function toggleFab() { fabOpen = !fabOpen; $('fabCluster').classList.toggle('open', fabOpen); $('fabMain').setAttribute('aria-expanded', fabOpen); }
+  function openTaskInput() {
+    taskInputOpen = true; $('newTaskRow').classList.remove('hidden');
+    const inp = $('newTaskInput'); inp.focus();
+  }
   function setDrawMode(on) {
     drawMode = on;
     canvas.className = 'ink ' + (on?'draw':'write');
-    $('drawFab').classList.toggle('on', on);
-    $('drawFab').textContent = on ? '✔' : '✎';
+    $('fabCluster').classList.toggle('drawing', on);
+    $('fabMain').textContent = on ? '✓' : '+';
     $('dockTools').classList.toggle('show', on);
     scrollArea.style.overflowY = on ? 'hidden' : 'auto'; // en dibujo, el scroll es con dos dedos
+    if (on) closeFab();
   }
-  $('drawFab').onclick = () => setDrawMode(!drawMode);
+  $('fabMain').onclick = () => { if (drawMode) { setDrawMode(false); return; } toggleFab(); };
+  $('actWrite').onclick = () => { closeFab(); openTaskInput(); };
+  $('actPhoto').onclick = () => { closeFab(); $('photoInput').click(); };
+  $('actNote').onclick = () => { closeFab(); createNote(); };
+  $('actDraw').onclick = () => { closeFab(); setDrawMode(true); };
+  // cerrar la botonera al tocar fuera
+  document.addEventListener('pointerdown', e => { if (fabOpen && !e.target.closest('#fabCluster')) closeFab(); }, true);
+  // ocultar el input de tarea al salir si queda vacío
+  $('newTaskInput').addEventListener('blur', () => { if (!$('newTaskInput').value.trim()) { taskInputOpen = false; $('newTaskRow').classList.add('hidden'); } });
 
   function setTool(t) { tool = t; $('moveBtn').classList.toggle('sel', t==='move'); }
   $('moveBtn').onclick = () => setTool(tool==='move' ? 'pen' : 'move');
@@ -1080,21 +1143,21 @@
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   let rec = null, recActive = false;
   if (SR) {
-    $('micBtn').classList.remove('hidden');
-    $('micBtn').onclick = () => {
+    $('actMic').classList.remove('hidden');
+    $('actMic').onclick = () => {
+      closeFab();
       if (recActive) { rec && rec.stop(); return; }
+      openTaskInput();
       rec = new SR(); rec.lang='es-ES'; rec.interimResults=true; rec.continuous=false;
       const input = $('newTaskInput');
       rec.onresult = ev => { let fin='', itm=''; for (const r of ev.results) { if (r.isFinal) fin+=r[0].transcript; else itm+=r[0].transcript; } input.value = (fin||itm); };
-      rec.onerror = () => { recActive=false; $('micBtn').classList.remove('rec'); };
-      rec.onend = () => { recActive=false; $('micBtn').classList.remove('rec'); if (input.value.trim()) { addItem(input.value.trim()); input.value=''; } };
-      recActive = true; $('micBtn').classList.add('rec'); try { rec.start(); } catch(e){ recActive=false; $('micBtn').classList.remove('rec'); }
+      rec.onerror = () => { recActive=false; $('actMic').classList.remove('rec'); };
+      rec.onend = () => { recActive=false; $('actMic').classList.remove('rec'); if (input.value.trim()) { addItem(input.value.trim()); input.value=''; } };
+      recActive = true; $('actMic').classList.add('rec'); try { rec.start(); } catch(e){ recActive=false; $('actMic').classList.remove('rec'); }
     };
   }
 
-  // ================= fotos: botón =================
-  $('photoBtn').onclick = () => $('photoInput').click();
-  $('noteBtn').onclick = createNote;
+  // ================= fotos: input de archivo =================
   $('photoInput').onchange = e => { const f = e.target.files[0]; addPhotoFile(f); e.target.value=''; };
 
   // lightbox cerrar
