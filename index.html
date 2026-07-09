@@ -457,7 +457,7 @@
   // days[HOME] = { items, strokes, photos:[{id,img,u,tab?,x?,y?,w?,h?}],
   //               tabs:[{id,name,items,strokes,size?,created?}], u }
   const HOME = 'home';
-  const VERSION = 'v13';
+  const VERSION = 'v14';
   let days = {};
   let viewKey = HOME;
   let viewTab = null; // id de la pestaña de pensamiento abierta (null = hoja principal)
@@ -964,13 +964,9 @@
       el.style.backgroundImage = 'url("' + p.img + '")';
       positionItem(el, g, true);
       el.addEventListener('contextmenu', ev => ev.preventDefault());
-      const move = mkHandle('fi-move','✥','Mover');
       const del = mkDel(() => removePhoto(p.id));
-      const grip = mkHandle('fi-resize','','Redimensionar');
-      el.append(move, del, grip); layer.appendChild(el); photoEls.set(p.id, el);
-      el.addEventListener('click', e => { if (isHandle(e.target)) return; $('lightboxImg').src = p.img; $('lightbox').classList.add('show'); });
-      attachMove(el, move, g, true);
-      attachResize(el, grip, g, true);
+      el.append(del); layer.appendChild(el); photoEls.set(p.id, el);
+      attachManipulate(el, g, true, () => { $('lightboxImg').src = p.img; $('lightbox').classList.add('show'); });
     });
     // --- notas de texto ---
     if (tab) (tab.notes||[]).forEach(n => {
@@ -979,54 +975,56 @@
       positionItem(el, g, false);
       const ta = document.createElement('textarea'); ta.className = 'note-text'; ta.rows = 1; ta.value = n.text||''; ta.placeholder = 'Escribe…';
       ta.addEventListener('input', () => { autoGrow(ta); n.text = ta.value; persistDebounced(); updateSheetHeight(); });
-      ta.addEventListener('pointerdown', e => e.stopPropagation()); // editar sin arrastrar
-      const move = mkHandle('fi-move','✥','Mover');
       const del = mkDel(() => removeNote(n.id));
-      const grip = mkHandle('fi-resize','','Ancho');
-      el.append(ta, move, del, grip); layer.appendChild(el); photoEls.set(n.id, el);
+      el.append(ta, del); layer.appendChild(el); photoEls.set(n.id, el);
       autoGrow(ta);
-      attachMove(el, move, g, false);
-      attachResize(el, grip, g, false);
+      attachManipulate(el, g, false, () => ta.focus(), ta);
     });
   }
 
-  // asa ✥ (arriba-izq) = mover; asa (abajo-der) = tamaño. Mueven la geometría
-  // LOCAL (g), que se guarda por dispositivo (no viaja en la sincronización).
-  function attachMove(el, handle, g, isPhoto) {
-    let id=null, sx=0, sy=0, ox=0, oy=0;
-    handle.addEventListener('pointerdown', e => {
-      e.stopPropagation(); e.preventDefault();
-      id=e.pointerId; sx=e.clientX; sy=e.clientY; ox=g.x; oy=g.y;
-      handle.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing');
-      sfx('pickup'); if (navigator.vibrate) navigator.vibrate(10);
+  // SIN asas: toque corto = acción (lightbox / editar); pulsación larga = manipular.
+  // La zona de la esquina/borde inf-der redimensiona; el resto mueve. La geometría
+  // es local (g) y no se sincroniza. Vibración suave al "coger".
+  function attachManipulate(el, g, isPhoto, onTap, ta) {
+    const EDGE = 26; // px desde el borde inferior/derecho para redimensionar
+    let id=null, armed=false, moved=false, mode='move', sx=0, sy=0, ox=0, oy=0, sW=0, aspect0=1, timer=null;
+    function regionAt(e) {
+      const r = el.getBoundingClientRect();
+      return ((r.right - e.clientX) <= EDGE || (r.bottom - e.clientY) <= EDGE) ? 'resize' : 'move';
+    }
+    el.addEventListener('pointerdown', e => {
+      if (e.target.closest('.fi-del')) return;
+      id=e.pointerId; armed=false; moved=false; mode=regionAt(e);
+      sx=e.clientX; sy=e.clientY; ox=g.x; oy=g.y; sW=g.w; aspect0=(isPhoto&&g.h&&g.w)?g.h/g.w:1;
+      timer = setTimeout(() => {
+        armed=true; movingFree=true; el.classList.add('grabbing');
+        try { el.setPointerCapture(id); } catch(e){}
+        if (ta) ta.blur();
+        sfx('pickup'); if (navigator.vibrate) navigator.vibrate(12);
+      }, 320);
     });
-    handle.addEventListener('pointermove', e => {
-      if (e.pointerId !== id) return; e.preventDefault();
-      g.x = clampX(ox + (e.clientX-sx)/cssW*LW, g.w);
-      g.y = Math.max(0, oy + (e.clientY-sy)/cssW*LW);
+    el.addEventListener('pointermove', e => {
+      if (e.pointerId !== id) return;
+      const dx=e.clientX-sx, dy=e.clientY-sy;
+      if (!armed) { if (Math.hypot(dx,dy) > 12) clearTimeout(timer); return; }
+      e.preventDefault(); moved=true;
+      if (mode === 'move') {
+        g.x = clampX(ox + dx/cssW*LW, g.w);
+        g.y = Math.max(0, oy + dy/cssW*LW);
+      } else {
+        const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
+        g.w = Math.max(isPhoto?120:140, Math.min(LW, sW + delta/cssW*LW));
+        if (isPhoto) g.h = Math.round(g.w * aspect0);
+      }
       positionItem(el, g, isPhoto); updateSheetHeight();
     });
-    handle.addEventListener('pointerup', e => { if (e.pointerId!==id) return; id=null; el.classList.remove('grabbing'); sfx('drop'); commitGeo(); });
-    handle.addEventListener('pointercancel', e => { id=null; movingFree=false; el.classList.remove('grabbing'); });
-  }
-  function attachResize(el, handle, g, isPhoto) {
-    let id=null, sx=0, sy=0, sW=0, aspect0=1;
-    handle.addEventListener('pointerdown', e => {
-      e.stopPropagation(); e.preventDefault();
-      id=e.pointerId; sx=e.clientX; sy=e.clientY; sW=g.w; aspect0 = (isPhoto && g.h && g.w) ? g.h/g.w : 1;
-      handle.setPointerCapture(e.pointerId); movingFree=true; el.classList.add('grabbing'); sfx('pickup');
-    });
-    handle.addEventListener('pointermove', e => {
-      if (e.pointerId !== id) return; e.preventDefault();
-      // el asa está abajo-derecha: arrastrar en horizontal O en vertical redimensiona
-      const dx = e.clientX - sx, dy = e.clientY - sy;
-      const delta = Math.abs(dx) >= Math.abs(dy) ? dx : dy;
-      g.w = Math.max(isPhoto?120:140, Math.min(LW, sW + delta/cssW*LW));
-      if (isPhoto) g.h = Math.round(g.w * aspect0);
-      positionItem(el, g, isPhoto); updateSheetHeight();
-    });
-    handle.addEventListener('pointerup', e => { if (e.pointerId!==id) return; id=null; el.classList.remove('grabbing'); sfx('drop'); commitGeo(); });
-    handle.addEventListener('pointercancel', e => { id=null; movingFree=false; el.classList.remove('grabbing'); });
+    const end = e => {
+      if (e.pointerId !== id) return; clearTimeout(timer); id=null;
+      if (armed) { armed=false; el.classList.remove('grabbing'); sfx('drop'); commitGeo(); }
+      else if (!moved && onTap) onTap();
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', e => { clearTimeout(timer); if (armed){armed=false; movingFree=false; el.classList.remove('grabbing');} id=null; });
   }
   function repositionPhotos() {
     const d = days[HOME] || {}; const tab = (d.tabs||[]).find(t => t.id === viewTab);
