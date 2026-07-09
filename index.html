@@ -87,6 +87,11 @@
   .tab-chip .t-del:hover { color: var(--ink); }
   .tab-new { border-style: dashed; color: var(--ink-soft); font-size: 15px; }
   .tab-new:hover { color: var(--verde); }
+  .tab-chip.sel { border-color: var(--verde); background: var(--verde-soft); }
+  .tab-chip .t-chk { font-family: var(--mono); font-size: 0.85em; color: var(--verde); }
+  .tab-export { border-color: var(--verde); color: var(--verde); font-size: 15px; }
+  .tab-export:hover { background: var(--verde-soft); }
+  .tab-chip:disabled { opacity: .45; cursor: default; }
 
   /* elementos libres (fotos y notas de texto) dentro de un pensamiento.
      Las fotos se pintan como fondo (no <img>) para que iOS no las secuestre. */
@@ -483,6 +488,11 @@
       case 'photo':  blip(700, 0.09, 'sine', 0.08, 1040); break;  // foto añadida
       case 'pickup': blip(320, 0.07, 'sine', 0.07, 420); break;   // coger (mover/redimensionar)
       case 'drop':   blip(420, 0.09, 'sine', 0.07, 300); break;   // soltar
+      case 'download': // jingle corto de descarga: dos notas suben y una baja al cerrar
+        blip(880, 0.06, 'triangle', 0.09, 1180);
+        setTimeout(() => blip(1180, 0.06, 'triangle', 0.09, 1560), 60);
+        setTimeout(() => blip(1560, 0.12, 'sine', 0.08, 780), 120);
+        break;
       default: blip(500, 0.08, 'sine', 0.07);
     }
   }
@@ -683,15 +693,17 @@
   }
 
   // ================= pestañas de pensamiento =================
+  let selectMode = false; const selectedTabs = new Set();
   function renderTabs() {
     const row = $('tabsRow');
     row.innerHTML = '';
     row.classList.toggle('hidden', !!viewTab);
-    if (viewTab) return;
+    if (viewTab) { selectMode = false; return; }
     const d = days[HOME] || {};
     (d.tabs||[]).forEach(t => {
-      const chip = document.createElement('button'); chip.className = 'tab-chip';
+      const chip = document.createElement('button'); chip.className = 'tab-chip' + (selectMode && selectedTabs.has(t.id) ? ' sel' : '');
       chip.style.fontSize = (15 * (t.size || 1)) + 'px';
+      if (selectMode) { const chk = document.createElement('span'); chk.className='t-chk'; chk.textContent = selectedTabs.has(t.id)?'✓':'○'; chip.appendChild(chk); }
       const nm = document.createElement('span'); nm.className = 't-name'; nm.textContent = t.name || 'pensamiento';
       const items = t.items||[]; const done = items.filter(i=>i.done).length;
       let m = ''; if (items.length) m += done+'/'+items.length;
@@ -699,16 +711,51 @@
       if ((d.photos||[]).some(p => p.tab === t.id)) m += (m?' · ':'')+'📷';
       chip.appendChild(nm);
       if (m) { const meta = document.createElement('span'); meta.className='t-meta'; meta.textContent = m; chip.appendChild(meta); }
-      const del = document.createElement('span'); del.className='t-del'; del.textContent='×';
-      del.onpointerdown = ev => ev.stopPropagation();
-      del.onclick = ev => { ev.stopPropagation(); deleteTab(t.id); };
-      chip.appendChild(del);
-      attachBubbleGestures(chip, t);
+      if (selectMode) {
+        chip.onclick = () => { if (selectedTabs.has(t.id)) selectedTabs.delete(t.id); else selectedTabs.add(t.id); sfx('open'); renderTabs(); };
+      } else {
+        const del = document.createElement('span'); del.className='t-del'; del.textContent='×';
+        del.onpointerdown = ev => ev.stopPropagation();
+        del.onclick = ev => { ev.stopPropagation(); deleteTab(t.id); };
+        chip.appendChild(del);
+        attachBubbleGestures(chip, t);
+      }
       row.appendChild(chip);
     });
-    const add = document.createElement('button'); add.className = 'tab-chip tab-new'; add.textContent = '+ pensamiento';
-    add.onclick = createTab;
-    row.appendChild(add);
+    const hasTabs = (d.tabs||[]).length > 0;
+    if (!selectMode) {
+      const add = document.createElement('button'); add.className = 'tab-chip tab-new'; add.textContent = '+ pensamiento';
+      add.onclick = createTab; row.appendChild(add);
+      if (hasTabs) { const exp = document.createElement('button'); exp.className='tab-chip tab-new'; exp.textContent='⤓ exportar'; exp.onclick = () => { selectMode=true; selectedTabs.clear(); renderTabs(); }; row.appendChild(exp); }
+    } else {
+      const go = document.createElement('button'); go.className='tab-chip tab-export'; go.textContent = '⤓ exportar (' + selectedTabs.size + ')';
+      go.disabled = selectedTabs.size===0; go.onclick = () => exportThoughts([...selectedTabs]);
+      const cancel = document.createElement('button'); cancel.className='tab-chip tab-new'; cancel.textContent='cancelar';
+      cancel.onclick = () => { selectMode=false; selectedTabs.clear(); renderTabs(); };
+      row.append(go, cancel);
+    }
+  }
+
+  // exporta uno o varios pensamientos (con fotos y texto en el mismo .json)
+  function exportThoughts(ids) {
+    if (!ids.length) return;
+    const d = days[HOME] || {};
+    const thoughts = ids.map(id => {
+      const t = (d.tabs||[]).find(x => x.id === id); if (!t) return null;
+      const photos = (d.photos||[]).filter(p => p.tab === id)
+        .map(p => ({ id:p.id, img:p.img, x:p.x, y:p.y, w:p.w, h:p.h }));
+      return { id:t.id, name:t.name||'pensamiento', created:t.created||null,
+               items:t.items||[], strokes:t.strokes||[], notes:t.notes||[], photos };
+    }).filter(Boolean);
+    const out = { type:'agenda-thoughts', version:1, exported:new Date().toISOString(), thoughts };
+    const blob = new Blob([JSON.stringify(out)], { type:'application/json' });
+    const one = thoughts.length===1;
+    const safe = one ? (thoughts[0].name||'pensamiento').replace(/[^\w\-áéíóúñ ]+/gi,'').trim().replace(/\s+/g,'-').slice(0,40) : todayKey();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = (one ? 'pensamiento-'+safe : 'pensamientos-'+safe) + '.json';
+    a.click(); URL.revokeObjectURL(a.href);
+    sfx('download');
+    selectMode = false; selectedTabs.clear(); renderTabs();
   }
 
   // toque corto = abrir; pulsación larga = redimensionar la burbuja arrastrando
@@ -900,11 +947,16 @@
       if (it) positionItem(el, it, isPhoto);
     });
   }
+  // los elementos nuevos nacen DEBAJO del texto (no tapan la cabecera)
+  function freeSpawnY(extra) {
+    const contentH = ($('content') && $('content').offsetHeight) || 120;
+    const baseY = Math.max(scrollArea.scrollTop + 30, contentH + 24) + (extra||0);
+    return Math.max(0, Math.round(baseY / cssW * LW));
+  }
   function createNote() {
     const tab = cur(); if (!tab || !viewTab) return;
     if (!tab.notes) tab.notes = [];
-    const y = Math.max(0, Math.round(scrollArea.scrollTop / cssW * LW)) + 120;
-    const n = { id: uid(), text:'', x: 60, y, w: 360, created: todayKey() };
+    const n = { id: uid(), text:'', x: 60, y: freeSpawnY(0), w: 360, created: todayKey() };
     tab.notes.push(n);
     sfx('create'); persist(); render();
     setTimeout(() => { const el = photoEls.get(n.id); const ta = el && el.querySelector('.note-text'); if (ta) ta.focus(); }, 40);
@@ -957,7 +1009,7 @@
           photo.w = 420;
           photo.h = Math.round(420 * img.height / img.width);
           photo.x = 40 + (n%3)*60;
-          photo.y = Math.max(0, Math.round(scrollArea.scrollTop / cssW * LW)) + 240 + (n%3)*60;
+          photo.y = freeSpawnY((n%3)*50);
         }
         if (!day().photos) day().photos = [];
         day().photos.push(photo);
