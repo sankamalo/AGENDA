@@ -498,7 +498,7 @@
   // days[HOME] = { items, strokes, photos:[{id,img,u,tab?,x?,y?,w?,h?}],
   //               tabs:[{id,name,items,strokes,size?,created?}], u }
   const HOME = 'home';
-  const VERSION = 'v17';
+  const VERSION = 'v18';
   let days = {};
   let viewKey = HOME;
   let viewTab = null; // id de la pestaña de pensamiento abierta (null = hoja principal)
@@ -1015,7 +1015,7 @@
     }));
     return out;
   }
-  function cableSag(A, B) { if (!A||!B) return 30; const d = Math.hypot(A.x-B.x, A.y-B.y); return Math.min(120, 18 + d*0.14); }
+  function cableSag(A, B) { if (!A||!B) return 55; const d = Math.hypot(A.x-B.x, A.y-B.y); return Math.min(220, 34 + d*0.26); }
   function drawCables() {
     cables.forEach(c => {
       const A = bubbleCenter(c.a), B = bubbleCenter(c.b);
